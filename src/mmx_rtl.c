@@ -82,14 +82,57 @@ static void *g_slot_fiber[MMX_NSLOTS] = {0};
 static uint16_t g_slot_fiber_pc[MMX_NSLOTS] = {0};
 static uint8_t g_slot_done[MMX_NSLOTS] = {0};
 static uint8_t g_slot_yield_cd[MMX_NSLOTS] = {0};
-/* Saved cpu->S per slot. Restored at resume time so each fiber sees
- * its own 65816 emulated stack window ($013F, $017F, $01BF, $01FF,
- * $023F, $027F, $02BF per the asm $8067 table). Without this, all
- * fibers share the global cpu->S and emulated PHA/PHX writes from
- * one task corrupt other tasks' DP slot fields ($30-$9F). */
-static uint16_t g_slot_saved_s[MMX_NSLOTS] = {0};
-static uint16_t g_saved_scheduler_s = 0x02FF;
+/* Saved CpuState per slot. The C-host fiber preserves the C stack but
+ * g_cpu is global — NMI/IRQ/other tasks mutate cpu->m_flag, cpu->x_flag,
+ * cpu->A, cpu->X, cpu->Y, cpu->DB, cpu->D, cpu->P, etc. between
+ * SwitchToFibers. Without per-slot save/restore, a task that yielded
+ * with (m=1, x=1) resumes seeing whatever the LAST runner left
+ * (typically m=0, x=0 from NMI's REP #$38 entry), and runtime-flag-
+ * gated code (DEX width, push/pop width, branch widths) executes with
+ * WRONG widths. Concrete bite: Task0's $8A4F OAM-Y init loop expected
+ * x=1 (64 iterations writing $E0 to $0701/$0801 only) but ran with x=0
+ * (16K iterations wrapping through all of WRAM, corrupting DP $39 to
+ * $E0 and breaking the $8C64 state machine that reads it).
+ *
+ * `saved` is set on first save; before that the slot's CpuState is
+ * uninitialised and entry-S is seeded from asm $86:8067 table at
+ * first dispatch. */
+typedef struct MmxSlotCpuSave {
+    uint8_t  saved;
+    uint16_t A, X, Y, S, D;
+    uint8_t  DB, PB, P;
+    uint8_t  m_flag, x_flag, emulation;
+    uint8_t  _flag_N, _flag_V, _flag_Z, _flag_C, _flag_I, _flag_D;
+} MmxSlotCpuSave;
+
+static MmxSlotCpuSave g_slot_saved_state[MMX_NSLOTS] = {0};
+static MmxSlotCpuSave g_saved_scheduler_state = {0};
 static uint8_t g_current_slot_idx = 0xFF;
+
+static inline void mmx_save_cpu(MmxSlotCpuSave *s, const CpuState *c) {
+    s->A = c->A; s->X = c->X; s->Y = c->Y; s->S = c->S; s->D = c->D;
+    s->DB = c->DB; s->PB = c->PB; s->P = c->P;
+    s->m_flag = c->m_flag; s->x_flag = c->x_flag;
+    s->emulation = c->emulation;
+    s->_flag_N = c->_flag_N; s->_flag_V = c->_flag_V;
+    s->_flag_Z = c->_flag_Z; s->_flag_C = c->_flag_C;
+    s->_flag_I = c->_flag_I; s->_flag_D = c->_flag_D;
+    s->saved = 1;
+}
+static inline void mmx_restore_cpu(CpuState *c, const MmxSlotCpuSave *s) {
+    c->A = s->A; c->X = s->X; c->Y = s->Y; c->S = s->S; c->D = s->D;
+    c->DB = s->DB; c->PB = s->PB; c->P = s->P;
+    c->m_flag = s->m_flag; c->x_flag = s->x_flag;
+    c->emulation = s->emulation;
+    c->_flag_N = s->_flag_N; c->_flag_V = s->_flag_V;
+    c->_flag_Z = s->_flag_Z; c->_flag_C = s->_flag_C;
+    c->_flag_I = s->_flag_I; c->_flag_D = s->_flag_D;
+}
+
+extern const char *g_last_recomp_func;
+extern int snes_frame_counter;
+extern uint8_t g_boundary_frozen;
+extern StackDriftTripwire g_stack_drift_tripwire;  /* declared in cpu_trace.h (already included) */
 
 static void CALLBACK mmx_fiber_entry(void *param) {
   uint8_t slot_idx = (uint8_t)(uintptr_t)param;
@@ -100,9 +143,27 @@ static void CALLBACK mmx_fiber_entry(void *param) {
    * done and the slot becomes empty. */
   g_mmx_task_slot_x = (uint8_t)(slot_idx << 4);
   mmx_dispatch_task_pc(&g_cpu, pc);
-  /* Body returned: task is finished. Mark slot empty, then bounce
-   * back to the scheduler. The scheduler will see g_slot_done and
-   * destroy the fiber. */
+  /* Body returned: task is finished. Diagnostic: log the death so we
+   * can correlate which task PC died at which frame and what the last
+   * recompiled function on the stack was. Freeze both rings ONCE for
+   * slot 0 so we can inspect the call path leading up to Task0's
+   * unexpected return — the trace freeze is auto-triggered via the
+   * stack-drift mechanism (which also freezes cpu_trace via
+   * capture()'s check). */
+  fprintf(stderr, "[fiber_die] frame=%d slot=%u pc=$%04X last_func=%s A=$%04X X=$%04X Y=$%04X S=$%04X D=$%04X DB=$%02X PB=$%02X m=%d x=%d\n",
+          snes_frame_counter, slot_idx, pc,
+          g_last_recomp_func ? g_last_recomp_func : "?",
+          g_cpu.A, g_cpu.X, g_cpu.Y, g_cpu.S, g_cpu.D,
+          g_cpu.DB, g_cpu.PB, g_cpu.m_flag, g_cpu.x_flag);
+  fflush(stderr);
+  if (slot_idx == 0 && !g_stack_drift_tripwire.triggered) {
+    g_stack_drift_tripwire.triggered = 1;  /* freezes cpu_trace */
+    g_boundary_frozen = 1;                 /* freezes boundary ring */
+    fprintf(stderr, "[fiber_die] froze rings for inspection\n");
+    fflush(stderr);
+  }
+  /* Mark slot empty, then bounce back to the scheduler. The scheduler
+   * will see g_slot_done and destroy the fiber. */
   g_slot_done[slot_idx] = 1;
   for (;;) {
     SwitchToFiber(g_scheduler_fiber);
@@ -111,24 +172,18 @@ static void CALLBACK mmx_fiber_entry(void *param) {
 
 void mmx_host_yield(uint8_t countdown) {
   /* Called from HleMmxYield* (via gen_stubs.c). We're inside a slot
-   * fiber. Mark the slot's WRAM state to "delayed cd=N" so the
-   * scheduler knows when to re-dispatch, then switch back. The
-   * fiber's stack is preserved across the switch, so the next
-   * SwitchToFiber-back resumes right after the yield call.
-   *
-   * Save cpu->S so the scheduler can restore each slot's own
-   * emulated 65816 stack window on resume — without this all
-   * fibers share one S and emulated PHA writes from one task
-   * trample other tasks' DP $30-$9F slot fields. */
+   * fiber. Save the full CpuState before SwitchToFiber so the scheduler
+   * (and other tasks / NMI / IRQ) can mutate g_cpu freely without
+   * trampling this slot's emulated 65816 state. Restore on resume. */
   uint8_t slot_idx = g_current_slot_idx;
   uint8_t x = (uint8_t)(slot_idx << 4);
   g_ram[(0x30 + x) & 0xFFFF] = 0x02;
   g_ram[(0x31 + x) & 0xFFFF] = countdown;
   g_slot_yield_cd[slot_idx] = countdown;
-  g_slot_saved_s[slot_idx] = g_cpu.S;
+  mmx_save_cpu(&g_slot_saved_state[slot_idx], &g_cpu);
   SwitchToFiber(g_scheduler_fiber);
-  /* Resume: restore cpu->S for this slot. */
-  g_cpu.S = g_slot_saved_s[slot_idx];
+  /* Resume: restore the full CpuState for this slot. */
+  mmx_restore_cpu(&g_cpu, &g_slot_saved_state[slot_idx]);
 }
 
 void MmxSchedulerTick(void) {
@@ -191,34 +246,39 @@ void MmxSchedulerTick(void) {
                 slot_idx, GetLastError());
         abort();
       }
-      if (dbg) fprintf(stderr, "  -> CREATE+enter slot=%u pc=$%04X\n",
-                       slot_idx, handler);
+      fprintf(stderr, "[fiber_new] frame=%d slot=%u pc=$%04X\n",
+              snes_frame_counter, slot_idx, handler);
+      fflush(stderr);
     } else {
       if (dbg) fprintf(stderr, "  -> RESUME slot=%u pc=$%04X\n",
                        slot_idx, handler);
     }
     g_ram[(0x30 + x) & 0xFFFF] = 0x03;  /* mark running */
     g_ram[0x00A0] = x;
-    /* Save scheduler S; install slot S. Each slot keeps its own
-     * emulated 65816 stack window (the asm $8067 table seeds entry-S
-     * = $013F, $017F, $01BF, $01FF, $023F, $027F, $02BF for slots 0..6). */
-    g_saved_scheduler_s = g_cpu.S;
-    if (g_slot_saved_s[slot_idx] == 0) {
-      /* Fresh fiber: load entry-S from slot's $36/$37 (asm convention). */
-      g_slot_saved_s[slot_idx] = (uint16_t)g_ram[(0x36 + x) & 0xFFFF]
-                               | ((uint16_t)g_ram[(0x37 + x) & 0xFFFF] << 8);
+    /* Save scheduler's full CpuState, install slot's. On first
+     * dispatch the slot's saved state is uninitialised — seed S from
+     * the asm $86:8067 table ($013F, $017F, $01BF, $01FF, $023F,
+     * $027F, $02BF for slots 0..6) and carry the rest of the current
+     * CpuState forward (ResetHandler's m=1, x=1, DB=$86, PB=$80 etc.
+     * are the post-reset baseline). */
+    mmx_save_cpu(&g_saved_scheduler_state, &g_cpu);
+    if (!g_slot_saved_state[slot_idx].saved) {
+      mmx_save_cpu(&g_slot_saved_state[slot_idx], &g_cpu);
+      g_slot_saved_state[slot_idx].S = (uint16_t)g_ram[(0x36 + x) & 0xFFFF]
+                                     | ((uint16_t)g_ram[(0x37 + x) & 0xFFFF] << 8);
     }
-    g_cpu.S = g_slot_saved_s[slot_idx];
+    mmx_restore_cpu(&g_cpu, &g_slot_saved_state[slot_idx]);
     SwitchToFiber(g_slot_fiber[slot_idx]);
-    /* Slot suspended or done — save its S, restore scheduler's. */
-    g_slot_saved_s[slot_idx] = g_cpu.S;
-    g_cpu.S = g_saved_scheduler_s;
+    /* Slot suspended or done — save its full CpuState, restore
+     * scheduler's. */
+    mmx_save_cpu(&g_slot_saved_state[slot_idx], &g_cpu);
+    mmx_restore_cpu(&g_cpu, &g_saved_scheduler_state);
     if (g_slot_done[slot_idx]) {
       DeleteFiber(g_slot_fiber[slot_idx]);
       g_slot_fiber[slot_idx] = NULL;
       g_slot_fiber_pc[slot_idx] = 0;
       g_slot_done[slot_idx] = 0;
-      g_slot_saved_s[slot_idx] = 0;
+      g_slot_saved_state[slot_idx].saved = 0;
       g_ram[(0x30 + x) & 0xFFFF] = 0x00;
       if (dbg) fprintf(stderr, "  <- slot=%u DONE\n", slot_idx);
     } else {
