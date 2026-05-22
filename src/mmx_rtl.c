@@ -101,12 +101,15 @@ void MmxRunOneFrameOfGame(void) {
    * Internal() (the main game loop) is captured fresh. The earlier
    * boot-time REP #$38 in I_RESET is expected and intentional; we only
    * want to know where x flips during ProcessGameMode dispatch. */
+  /* Main-loop wiring deferred: see bank00.cfg's TODO note. The MMX
+   * asm main loop at $00:8099 has cross-fn branches to dispatch
+   * handlers ($80DA, $80E9, $80CC) that must each be declared with
+   * their own `func` entries before MainLoop can be emitted as a
+   * truncated-returnable function. Until then the per-frame work is
+   * NMI-only — the boot screen will eventually trip when MMX needs
+   * the dispatcher to actually run. */
   cpu_trace_arm_px_tripwire();
-  /* MMX's main loop isn't yet declared in cfg as a separate function;
-   * for now I_NMI does the per-frame work via the vblank handshake.
-   * Once we identify the asm main-loop PC (and a `func` cfg entry
-   * lets the recompiler emit it as a returnable function), call it
-   * here. Until then, NMI-only is enough for an attract-screen boot. */
+  waiting_for_vblank = 0xFF;
   cpu_trace_px_breadcrumb(&g_cpu, 0x2003, "after_Internal");
   g_first_frame_done = true;
 }

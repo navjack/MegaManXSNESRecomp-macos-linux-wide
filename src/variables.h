@@ -17,12 +17,12 @@
  * mmx_rtl.c. Framework-shaped, not game-specific. */
 extern uint16 counter_global_frames;
 
-/* MMX uses $7E:001F as the NMI flag (the asm boots with the same
- * `LDA $1F ; BEQ -4` spinlock pattern as the other Capcom titles
- * branded under the original Mega Man X engineers). Host-side
- * orchestration mirrors I_NMI's `STZ $1F` to clear it. Verify the
- * address by inspecting the asm spinlock during first-boot diagnose
- * if symptoms suggest otherwise. */
-#define waiting_for_vblank (*(uint8*)(g_ram + 0x1F))
+/* MMX's NMI vblank flag is at $7E:0B9D — verified from the main-loop
+ * spinlock at $00:80A1 (`LDA $0B9D ; BEQ -3`) and the NMI handler at
+ * $00:8195 (`LDA #$FF ; STA $0B9D`). NMI sets it to $FF; the main
+ * loop reads it, then (eventually) zeros it during dispatch. Setting
+ * this to non-zero before calling MainLoop short-circuits the
+ * spinlock so the C host can drive the loop one frame at a time. */
+#define waiting_for_vblank (*(uint8*)(g_ram + 0x0B9D))
 
 #endif /* VARIABLES_H */
