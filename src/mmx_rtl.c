@@ -287,6 +287,30 @@ void MmxSchedulerTick(void) {
     }
   }
   g_current_slot_idx = 0xFF;
+  /* Ack-clear NMI handshake flags so NMI's gated DMA path runs.
+   *
+   * Asm scheduler at $00:80C6 (and $80CC, slot-6 special) STZs $0B9D
+   * after walking all 7 slots, then JMP $8099 back to the spinlock-
+   * on-$0B9D. NMI sets $0B9D = $FF at $8193-$8195; tasks/IRQ are
+   * expected to clear it before the next NMI's $8188 LDA $0B9D ;
+   * ORA $0BA0 ; BNE $8193 check (which gates the JSR $8822 call) and
+   * its mirror at $83FC LDA $0B9D ; ORA $0BA0 ; BNE $8421 inside the
+   * $83F1 dispatch (which gates JSR $81E3 → CGRAM/OAM DMA + JSR $82C8
+   * → VRAM DMA).
+   *
+   * $0BA0 is the IRQ-side ack flag — NMI also sets it $FF at $8198;
+   * IRQ handler paths $84C6 / $84F5 / $851F STZ $0BA0. But IRQ enable
+   * depends on $4200 = $B1 which is only set by NMI's $8458 path
+   * ($8460 STA $4200) — and $8458 only runs if `$0B9D | $0BA0 == 0`.
+   * Chicken-and-egg: without bootstrap ack-clearing both flags, IRQ
+   * never enables, $0BA0 never clears, NMI's gated DMA never fires,
+   * CGRAM stays empty, and the Capcom logo renders to a black screen.
+   *
+   * Bootstrap both in the C-host scheduler so the NMI/IRQ handshake
+   * gets off the ground. Once IRQ is enabled (via NMI's $8460), the
+   * asm IRQ handler resumes clearing $0BA0 naturally each frame. */
+  g_ram[0x0B9D] = 0x00;
+  g_ram[0x0BA0] = 0x00;
 }
 
 void MmxDrawPpuFrame(void) {
