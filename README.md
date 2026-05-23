@@ -1,4 +1,4 @@
-# MegamanXRecomp
+# MegaManXSNESRecomp
 
 Static recompilation of *Mega Man X* (SNES) into native C, using the
 [snesrecomp](https://github.com/mstan/snesrecomp) framework. This repo
@@ -19,10 +19,78 @@ similar projects: recompile the CPU, emulate the silicon.
 The ROM is **never** redistributed — you supply your own legally-dumped
 copy.
 
-## Current status: early — work in progress
+## Current status: 0.1.0 — playable, with frequent lockups and visual bugs
 
-This is the third game on the snesrecomp framework, after SMW and
-ALttP. Expect rough edges; nothing is verified-playable yet.
+Hand-verified end-to-end through:
+
+- Boot → Capcom logo → attract intro (X on the Highway stage, Zero on
+  the motorcycle) → title screen.
+- Attract demo plays back through multiple scene transitions.
+
+**Known issues at this release**
+
+- **Frequent lockups.** Various points in the game stall the C-host
+  fiber scheduler. Save state often.
+- **Visible visual bugs.** Sprite-mode timing, HDMA windowing, and
+  BG layer priority all have rough edges in places.
+
+This is `0.1.0` — the first release that gets past the boot fade-wait
+and into rendered content. Active development; expect:
+
+- Some branches don't build; only `main` is guaranteed to build.
+- APIs and recompiler output change without notice.
+
+If you hit a reproducible lockup or visual regression, please open an
+issue with a savestate (`Shift+F1`) and the frame at which it
+manifested.
+
+## Quick start (pre-built release)
+
+1. Download the latest release zip from [Releases](../../releases) and
+   extract it.
+2. Run `mmx.exe`. On first launch a file picker asks for your
+   **legally-obtained** *Mega Man X (USA) (Rev 1)* ROM (`.sfc` /
+   `.smc`). The expected SHA-256 is
+   `b8f70a6e7fb93819f79693578887e2c11e196bdf1ac6ddc7cb924b1ad0be2d32`
+   (1.5 MiB, LoROM). 512-byte SMC copier headers are auto-stripped
+   before hashing, so headered or unheadered both work.
+3. Edit `keybinds.ini` (auto-generated next to the exe on first run) to
+   remap keys, then restart.
+
+The path you pick is cached to `rom.cfg` next to the exe so subsequent
+launches skip the picker.
+
+## Controls (default `keybinds.ini`)
+
+| SNES button | Default key |
+|-------------|-------------|
+| D-Pad       | Arrow keys |
+| A           | X |
+| B           | Z |
+| X           | S |
+| Y           | A |
+| L           | C |
+| R           | V |
+| Start       | Enter |
+| Select      | Right Shift |
+
+Player 2 is unbound by default — fill in keys in `keybinds.ini` to
+enable a second keyboard player.
+
+**Xbox / PlayStation / Switch Pro controllers** are auto-detected via
+SDL_GameController (XInput on Windows). Plug it in before launching, or
+hot-plug after.
+
+System shortcuts (configured in `mmx.ini`'s `[KeyMap]` section):
+
+| Action               | Default |
+|----------------------|---------|
+| Save state 1-10      | Shift+F1..F10 |
+| Load state 1-10      | F1..F10 |
+| Toggle pause         | P |
+| Reset                | Ctrl+R |
+| Toggle fullscreen    | Alt+Enter |
+| Turbo (fast-forward) | Tab |
 
 ## Building from source
 
@@ -30,46 +98,34 @@ Prerequisites: Windows 10+, Visual Studio 2022 (with C++ desktop
 workload), Python 3.9+ on PATH.
 
 ```bash
-git clone https://github.com/mstan/MegamanXRecomp
+git clone https://github.com/mstan/MegaManXSNESRecomp
 git clone https://github.com/mstan/snesrecomp
-cd MegamanXRecomp
+cd MegaManXSNESRecomp
 ```
 
 The `snesrecomp/` directory is a [sibling repo](https://github.com/mstan/snesrecomp)
 accessed via a junction/symlink to the clone next to this repo.
 
-Drop a legally-obtained `mmx.sfc` at the repo root, then regenerate
-the recompiled C and build:
+Build:
 
 ```bash
-python ../snesrecomp/tools/v2_regen.py --rom mmx.sfc --cfg-dir recomp --out-dir src/gen --prefix mmx
-
 # From a Developer Command Prompt for VS 2022, or with MSBuild on PATH:
 msbuild mmx.sln /p:Configuration=Oracle /p:Platform=x64 /m
 ```
 
-The recompiled C in `src/gen/` is **not** committed — contributors
-regenerate it from a local ROM before the first build.
+The recompiled C in `src/gen/` is **not** committed — contributors must
+regenerate it from a local ROM before the first build. See the next
+section.
 
-## ROM verification
+### Regenerating the recompiled C (contributors)
 
-The launcher pins against this SHA-256 (computed locally — verify
-against another canonical source before relying on it for public
-release):
-
-```
-SHA-256 = b8f70a6e7fb93819f79693578887e2c11e196bdf1ac6ddc7cb924b1ad0be2d32
-```
-
-*Mega Man X (USA) (Rev 1)*, 1.5 MiB LoROM. 512-byte SMC copier headers
-are auto-stripped before hashing.
-
-## Controls (default `keybinds.ini`)
-
-Same defaults as the SMW / ALttP runners — arrow keys for D-pad;
-XZASCV for the six face/shoulder buttons; Enter / Right Shift for
-Start / Select. Edit `keybinds.ini` (auto-generated on first run) to
-remap.
+1. Drop a legally-obtained `mmx.sfc` at the repo root (`.gitignore`
+   excludes it).
+2. Run:
+   ```bash
+   python ../snesrecomp/tools/v2_regen.py --rom mmx.sfc --cfg-dir recomp --out-dir src/gen --prefix mmx
+   ```
+3. Rebuild as above.
 
 ## Repo layout
 

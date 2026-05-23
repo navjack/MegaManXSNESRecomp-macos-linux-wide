@@ -58,10 +58,11 @@ src/gen/
 _triage/
 hw_trace.log
 
-# Screenshots / scratch BMPs + their auto-converted PNG companions
-# (python _convert.py shot.bmp emits shot.png alongside the source).
+# Screenshots / scratch BMPs and PNGs. Any image meant to ship with
+# the public repo (README assets, docs) belongs in docs/ or assets/
+# and gets an explicit unignore there.
 *.bmp
-shot*.png
+*.png
 
 # Per-session debugging / triage scratch (any underscore-prefixed file
 # at the repo root is treated as scratch and not committed).
@@ -71,6 +72,7 @@ _*
 packages/
 
 # Release artifacts (built locally, uploaded via gh release upload)
+MegaManXSNESRecomp-windows-*.zip
 MegamanXRecomp-windows-*.zip
 mmx-v*.zip
 release-stage/
