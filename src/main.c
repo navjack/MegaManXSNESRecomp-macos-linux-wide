@@ -726,7 +726,7 @@ error_reading:;
   // The runner typically loads smw.sfc from cwd via the asset pipeline
   // (argv[0] is usually NULL), so we default to "smw.sfc" in cwd when
   // argv[0] was not supplied.
-  {
+  if (g_config.enable_snes9x_oracle) {
     extern int snes_oracle_init_default(const char *rom_path);
     const char *rom_path = (argv[0] && *argv[0]) ? argv[0] : "smw.sfc";
     int rc = snes_oracle_init_default(rom_path);
@@ -734,6 +734,31 @@ error_reading:;
       fprintf(stderr, "[oracle] init failed rc=%d (rom=%s)\n", rc, rom_path);
     else
       fprintf(stderr, "[oracle] backend ready (rom=%s)\n", rom_path);
+  } else {
+    /* Disabled in mmx.ini. Tell the framework dispatcher so every TCP
+     * emu_* command returns a structured warning instead of silently
+     * no-op'ing — and explicitly tells callers re-enabling is NOT a
+     * fix. The reason string MUST be a string literal (stored by
+     * reference, not copied). Also dump it loudly to stderr at startup
+     * so it's impossible to miss in the boot log. */
+    extern void snes_oracle_set_disabled_by_game(const char *reason);
+    static const char *kReason =
+        "MMX freeze repros load a save state to reach the failure scene. "
+        "The snes9x oracle starts from boot and cannot follow save-state "
+        "loads, so any recomp-vs-oracle WRAM/PC comparison ends up "
+        "diffing two unrelated game moments. A prior session burned real "
+        "time chasing false 'divergences' that were just content "
+        "mismatch. Disabled in mmx.ini ([General] EnableSnes9xOracle = "
+        "false) until save-state-aware oracle or input-record/replay "
+        "parity exists. Re-enabling without fixing that is NOT a "
+        "solution.";
+    snes_oracle_set_disabled_by_game(kReason);
+    fprintf(stderr,
+        "\n=== snes9x oracle DISABLED for MMX ===\n"
+        "Reason: %s\n"
+        "All emu_* TCP commands will refuse with a structured warning.\n"
+        "Do NOT re-enable as a workaround.\n\n",
+        kReason);
   }
 #endif
 

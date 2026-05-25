@@ -260,6 +260,8 @@
     <ClCompile Include="gen\mmx_06_v2.c" />
     <ClCompile Include="gen\mmx_07_v2.c" />
     <ClCompile Include="gen\mmx_08_v2.c" />
+    <ClCompile Include="gen\unresolved_stubs_v2.c" />
+    <ClCompile Include="gen\mmx_dispatch_v2.c" />
     <ClCompile Include="..\snesrecomp\runner\src\debug_server.c">
       <ExcludedFromBuild Condition="'$(Configuration)'=='Production'">true</ExcludedFromBuild>
     </ClCompile>

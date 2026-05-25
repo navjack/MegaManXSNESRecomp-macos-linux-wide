@@ -371,6 +371,8 @@ static bool HandleIniConfig(int section, const char *key, char *value) {
       return ParseBool(value, &g_config.display_perf_title);
     } else if (StringEqualsNoCase(key, "DisableFrameDelay")) {
       return ParseBool(value, &g_config.disable_frame_delay);
+    } else if (StringEqualsNoCase(key, "EnableSnes9xOracle")) {
+      return ParseBool(value, &g_config.enable_snes9x_oracle);
     }
   } else if (section == 4) {
   }
@@ -429,6 +431,10 @@ void ParseConfigFile(const char *filename) {
    * = false` in mmx.ini overrides this. */
   g_config.enable_gamepad[0] = true;
   g_config.enable_gamepad[1] = true;
+  /* Default ON to preserve current behaviour across other ports that
+   * share this framework code; per-game .ini sets it false where the
+   * oracle is incompatible with the repro workflow. See config.h doc. */
+  g_config.enable_snes9x_oracle = true;
 
   if (filename != NULL || !ParseOneConfigFile("smw.user.ini", 0)) {
     if (filename == NULL)

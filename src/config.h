@@ -53,6 +53,15 @@ typedef struct Config {
   bool display_perf_title;
   bool disable_frame_delay;
 
+  /* Oracle-build only. When false, main.c skips snes_oracle_init_default
+   * and calls snes_oracle_set_disabled_by_game so the dispatcher refuses
+   * every emu_* command with a structured warning naming the reason. For
+   * MMX, this defaults to OFF in mmx.ini because the freeze repro path
+   * is save-state load, which the from-boot oracle cannot follow — a
+   * prior session wasted real time chasing false divergences before
+   * noticing. See snes_oracle_backend.h header doc. */
+  bool enable_snes9x_oracle;
+
   char *memory_buffer;
   const char *shader;
 
