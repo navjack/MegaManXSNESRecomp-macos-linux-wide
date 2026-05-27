@@ -501,7 +501,7 @@ void MmxRunOneFrameOfGame(void) {
       #define OAMDBG_VARS snes_frame_counter, onscreen, \
         g_ram[0x1F11], g_ram[0x0BCF], g_ram[0x1F9A], g_ram[0x00E4], g_ram[0x00E5]
       if (s_drop_frame < 0) {
-        if (s_prev >= 12 && s_prev <= 100 && onscreen <= 8) {
+        if (s_prev >= 70 && s_prev <= 128 && onscreen <= 8) {
           s_drop_frame = snes_frame_counter; s_drop_prev = s_prev;
           fprintf(stderr, "[oamvar] PRE  f=%d on=%d 1F11=%02X 0BCF=%02X 1F9A=%02X E4=%02X E5=%02X\n", OAMDBG_VARS);
           /* Dump the 128 OAM Y bytes so we see WHICH slots parked (X/HUD-

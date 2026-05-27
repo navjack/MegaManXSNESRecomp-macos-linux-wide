@@ -83,6 +83,98 @@ explosion's heavy load — to be pinned next (the `s0drift` diagnostic in
 recovers rather than monotonically drifting). The historical
 softlock-era analysis below is retained for context.
 
+#### Root-cause investigation — 2026-05-27 (fish-explosion OAM/HUD wipe)
+
+Pinned the transient OAM/HUD blank to a **shared-tail RTS return-target
+divergence** in the Option-1 model. Evidence captured with two focused,
+always-on, tripwire-frozen traces (see "Observability added" below).
+
+**CONFIRMED (data-backed, from the RTS-decision + WRAM-write rings):**
+
+- The blank is `D56F`'s OAM park loop (`$D5C1`) clearing slots
+  `[$E4, $E3)` to `Y=$E0`. At the wipe frame the park reads start
+  `$E4 = 0`, end `$E3 = 0x80` → it parks **all 128 OAM slots** (every
+  sprite + HUD).
+- `$E4` (the per-frame OAM-slot count) **legitimately reaches `0x80`
+  (128 = OAM full)** under the explosion load. Normal frames peak
+  `~0x7c`. So over-allocation is NOT the bug — do **not** cap `$E4`.
+- When the build fills OAM, `D6A7` takes its **overflow exit**
+  (`$D74E CMP X,#$1F ; BCS $D765 ; JMP $D5CC`) into the shared finalize
+  `$D5CC` (`$E3 = $E4 = 0x80 ; $E4 = 0`).
+- The `$D5CC` finalize is **duplicated** into both the `D56F` and `D6A7`
+  generated host functions. The `$D5CC` RTS (`$D5DE`) reached via the
+  `D6A7` overflow path executes **in `D6A7`'s copy**: `entry_s = 0x132`
+  (D6A7's frame) but the live stack `ret_s = 0x138` → `s_eq = 0` → it
+  cannot host-return. It dispatches on the popped PC `$9AA6`; `$9AA6` is
+  a host-return continuation (not a dispatch entry, `found = 0`) → it
+  classifies as **`MISS_UNWIND`** (restore S, return `RECOMP_RETURN_NORMAL`).
+- The Option-1 miss-unwind returns `NORMAL` **one host-C frame** (to
+  `D6A7`'s caller). The popped PC `$9AA6` actually lives **several**
+  frames up — it is the continuation after `JSR $D56F` at `$9AA3`. So
+  `D625`/`D56F` wrongly resume and run `D56F`'s park (`$D5C1`) → wipe.
+  (Confirmed by the trace showing `D56F`'s own `$D5DE` finalize running
+  *after* the `D6A7` miss-unwind, i.e. `D56F`'s body executed post-reset,
+  and by the earlier WRAM ring showing `D56F` parent-`9A6A` writing `$E0`.)
+
+Decision table (wipe build frame; `src=$D5DE` is the `$D5CC` RTS):
+
+| func copy | entry_s | ret_s | s_eq | popped | found | decision | E3 | E4 |
+|---|---|---|---|---|---|---|---|---|
+| `D6A7_M1X0` (overflow) | 0132 | 0138 | 0 | `$9AA6` | 0 | **MISS_UNWIND** | 80 | 00 |
+| `D56F_M1X1` (normal)   | 0138 | 0138 | 1 | `$9AA6` | 0 | HOST_RETURN | 00 | 00 |
+
+Normal (non-wipe) frame: a single `$D5DE` RTS in `D56F_M1X1`,
+`entry_s==ret_s==0x138`, HOST_RETURN, `E3=0x7c`. No `D6A7`-context
+finalize.
+
+**THEORY (not oracle-confirmed — snes9x oracle is disabled for
+save-state repros):** on hardware the overflow `JMP $D5CC ; RTS` pops
+`$9AA6` and returns *out of the entire OAM routine* (back to `9A6A`),
+**skipping the park** — OAM retains its 128 built sprites and renders
+full (consistent with the user's report that the original *lagged* here
+but never blanked the HUD). Our recomp diverges because "return to
+`$9AA6`" is a multi-level non-local return that the one-frame miss-unwind
+does not perform.
+
+**Root-cause class (THEORY for the general fix):** a `JMP` into a shared
+tail block ending in `RTS`, where the RTS's popped return targets a
+**far-ancestor** continuation (multi-level non-local return). The
+Option-1 RTS-dispatch-miss unwinds exactly one host-C frame, so
+intermediate frames execute code hardware never reaches. Any routine
+with a "bail to shared epilogue then RTS out several levels" idiom is
+exposed to this class.
+
+**Ruled out this session:** (1) declaring the `$9AA6`/`$D6A6`/`$D3EC`
+dispatch-miss targets as cfg `func` entries — those misses are the
+Option-1 *unwind mechanism*, not graph failures; declaring them did not
+change the wipe and **regressed** into a sustained black screen
+(reverted). PRINCIPLES §13a "add miss targets to cfg" does NOT apply to
+host-return-continuation misses in this calling model. (2) `$E4`
+over-count (it legitimately reaches `0x80`).
+
+**Observability added (`feat/cpu-s-stack-model`, runner + RTS lowering,
+nothing in `src/gen/`):**
+
+- **RTS/return-decision trace** — `dbg_rts_trace()` emitted once per
+  RTS/RTL by `_emit_return` (codegen.py), recorded in `debug_server.c`.
+  Classifies each RTS as `HOST_RETURN` / `DISPATCH` / `MISS_UNWIND` with
+  `entry_s`/`ret_s`/`s_after`/popped PC/`hrv`/`found`/`$E3`/`$E4`.
+  Commands: `rtstrace_range <lo> <hi>`, `get_rtstrace [from to limit]`.
+  Uses `cpu_dispatch_has_entry()` (cpu_state.c) for a side-effect-free
+  dispatch-table probe.
+- **PC-range block-path trace** — `dbg_oam_block_trace()` hooked in
+  `cpu_trace_block`. Per-block `pc`/`func`/`parent`/`depth` + full regs
+  (A,X,Y,S,D,DB,PB,P,mx) + `$E3/$E4/$E6/$E8/$EA/$EB`. Commands:
+  `oamblk_range <lo> <hi>`, `get_oamblk [from to limit]`.
+- Both are PC-range-filtered and frozen by the same `g_boundary_frozen`
+  tripwire the `[oamdrop]` detector trips (also unified the WRAM-write
+  ring onto that freeze this session).
+
+**Proposed fix (THEORY — not yet implemented):** make the shared-tail
+RTS resolve the popped PC against the *dynamic* stack rather than the
+enclosing host function's `entry_s`. Candidate approaches under
+evaluation — see the fix proposal appended at the end of this file.
+
 #### Summary (TL;DR)
 
 Under heavy sprite load the game **softlocks**, but it *looks* like a render
@@ -1032,3 +1124,108 @@ For option 2 (PEI-trampoline detector), additional files:
 - `snesrecomp/recompiler/v2/codegen.py` — when emitting a function
   marked `is_trampoline`, replace its RTS/RTL with a dispatch
   on the topmost stack bytes computed via `cpu->S`.
+
+---
+
+## Fix proposal — shared-tail multi-level non-local return (2026-05-27)
+
+> **STATUS: PROPOSAL / THEORY — not implemented.** Evidence is in
+> "Root-cause investigation — 2026-05-27" above. snes9x oracle is
+> disabled for save-state repros, so the "hardware skips the park"
+> premise is inferred from the popped PC + the user's report, not
+> oracle-confirmed. Validate with the RTS-decision trace before/after.
+
+### The defect (recap)
+
+`D6A7`'s OAM-overflow exit does a manual stack rebalance
+(`$D765: PLX PLX … $D5CC: PLB`) that pops `cpu->S` back to the OAM
+routine's entry level, then `RTS` ($D5DE). On hardware that single RTS
+returns to `$9AA6` — the continuation of `JSR $D56F` at `$9AA3` — i.e.
+it returns *out of the whole OAM routine*, several call levels up, and
+the park (`$D5C1`) is never reached.
+
+In the Option-1 model each `JSR` is a host-C call paired with one
+`cpu->S` frame, assuming the two stacks stay in lockstep. The "pop N
+frames then RTS out" idiom breaks lockstep: it unwinds `cpu->S` without
+returning the matching host-C functions. The overflow `RTS` then runs in
+`D6A7`'s host frame with `_ret_s = 0x138` (the rebalanced level) but
+`_entry_s = 0x132` (D6A7's), so `s_eq = 0`; it dispatches on `$9AA6`,
+which is a host-return continuation (`found = 0`), and the miss-unwind
+returns `RECOMP_RETURN_NORMAL` **one** host frame. The popped return
+belongs to an ancestor several frames up, so `D625`/`D56F` wrongly
+resume and run the park.
+
+### Recommended fix — ancestor-frame unwind keyed on `_ret_s`
+
+Observation: after the manual rebalance, the missing RTS's `_ret_s`
+(`cpu->S` before its pop) equals the **entry_s of the ancestor host
+frame whose return this RTS actually is** — here `0x138` == `D56F`'s
+`_entry_s`. The intermediate frames have strictly deeper (smaller)
+`_entry_s` (`D6A7=0x132`, `D625/D5DF=0x134`). So the unwind target is
+identified by `_ret_s`, using only `_entry_s` which every frame already
+tracks — no PC table needed.
+
+Mechanism:
+
+1. New return code `RECOMP_RETURN_DISPATCH_UNWIND` (distinct from the
+   existing NLR-skip codes).
+2. In `_emit_return`'s RTS/RTL dispatch path (codegen.py): on a lookup
+   **miss**, if `_ret_s != _entry_s` (the stack is shallower than this
+   frame's entry — a manual rebalance unwound past it), set a global
+   `g_unwind_target_s = _ret_s` and return `DISPATCH_UNWIND` instead of
+   restoring S + returning NORMAL. (If `_ret_s == _entry_s`, keep the
+   current leaf-unwind NORMAL behavior.)
+3. At every host-call site (the `_r = callee(cpu); if (_r != NORMAL)…`
+   pattern emitted by `_emit_call`): when `_r == DISPATCH_UNWIND`,
+   compare `g_unwind_target_s` to the **enclosing** function's
+   `_entry_s`:
+   - **equal** → this frame is the one whose return the RTS represents:
+     return `RECOMP_RETURN_NORMAL` (host-return; the caller resumes at
+     its natural continuation — for `9A6A` that is `$9AA6`).
+   - **not equal** → return `DISPATCH_UNWIND` (propagate up without
+     running this frame's continuation).
+4. Guard: if the unwind reaches the outermost frame without a match,
+   fall back to the current restore-S + NORMAL behavior (a genuine leaf
+   miss, not a multi-level return).
+
+Why this is correct and why it does NOT repeat the reverted cfg mistake:
+the continuation `$9AA6` runs in **`9A6A`'s** host context (via D56F's
+normal host-return), not dispatched into with `host_return_valid = 0`.
+`cpu->S` is already at the rebalanced level (the PLX/PLB popped it), so
+intermediate frames returning early without their own pops is correct —
+same rationale as the existing NLR-skip path.
+
+### Alternative considered
+
+- **PC-keyed unwind**: carry the popped PC and resume at the host-call
+  site whose continuation == that PC. Requires a continuation-PC table
+  and per-call-site comparisons; strictly more machinery than the
+  `_ret_s == _entry_s` key, with no extra correctness. Not recommended.
+- **Declare `$9AA6`/`$D6A6` as cfg `func` entries**: REJECTED — already
+  tried; dispatches into the continuation in the wrong (`hrv=0`) context
+  and regressed to a black screen (see "Ruled out" above).
+- **Cap `$E4` / suppress the park**: REJECTED — `$E4` legitimately
+  reaches `0x80`; capping or suppressing is a symptom patch.
+
+### Risks / open questions
+
+- Multiple ancestor frames sharing the same `_entry_s` (recursion) would
+  stop at the innermost match. No such case in the OAM path; note as a
+  caveat for the general fix.
+- Frames between the originator and the target that pushed extra
+  `cpu->S` state must have had it popped by the manual rebalance already
+  (true for this idiom). Verify no path returns `DISPATCH_UNWIND` while
+  still owing a `cpu->S` pop.
+- Interaction with the existing `_pending_skip` NLR codes — pick a
+  non-colliding `RECOMP_RETURN_*` value and audit the propagation joins.
+
+### Validation plan (with the new traces)
+
+After implementing, re-run the fish repro and confirm via
+`get_rtstrace`/`get_oamblk`:
+- the overflow `$D5DE` RTS in `D6A7` now classifies as the new
+  `DISPATCH_UNWIND` and propagates to `D56F` which host-returns;
+- `D56F`'s park (`$D5C1`) executes **once** (tail clear), not 128×;
+- `[oamdrop]` does not fire; HUD + sprites stay through the explosion;
+- SMW + LttP cross-game smoke unaffected (the change only alters the
+  dispatch-MISS path when `_ret_s != _entry_s`).
