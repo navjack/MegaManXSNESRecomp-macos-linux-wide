@@ -479,6 +479,57 @@ void MmxRunOneFrameOfGame(void) {
       fprintf(stderr, "  [pre-NMI ] slot0 state=$%02X cd=$%02X pc=$%02X%02X\n",
               g_ram[0x30], g_ram[0x31], g_ram[0x33], g_ram[0x32]);
     }
+#if SNESRECOMP_TRACE
+    /* OAM-dropout detector (task #7): count on-screen sprites in the OAM
+     * shadow ($0700 low table; Y is byte 1 of each 4-byte entry, off-screen
+     * park = $E0). The transient dropout = sustained gameplay -> sudden
+     * collapse to ~0 -> RECOVERY within a few frames. That recovery is what
+     * distinguishes it from a scene transition (which stays low / changes
+     * scene). Freeze the boundary ring only on a confirmed transient
+     * collapse-then-recover, so the object-engine perturbation that built the
+     * empty OAM (a frame or two before the collapse) is captured. */
+    if (mmx_rtl_diag_enabled() && !g_boundary_frozen && snes_frame_counter > 1500) {
+      static int s_prev = -1;       /* on-screen count last frame */
+      static int s_drop_frame = -1; /* frame the collapse began (-1 = idle) */
+      static int s_drop_prev = 0;   /* on-screen count just before collapse */
+      int onscreen = 0;
+      for (int i = 0; i < 128; i++)
+        if (g_ram[(0x0700 + i * 4 + 1) & 0x1FFFF] < 0xE0) onscreen++;
+      /* Snapshot the OAM-build gate vars so we can diff dropout vs normal:
+       * $1F11 = OAM-build mode (JMP ($D7D8,X) index), $0BCF = build flag,
+       * $1F9A = sprite limit, $E4/$E5 = build counters. */
+      #define OAMDBG_VARS snes_frame_counter, onscreen, \
+        g_ram[0x1F11], g_ram[0x0BCF], g_ram[0x1F9A], g_ram[0x00E4], g_ram[0x00E5]
+      if (s_drop_frame < 0) {
+        if (s_prev >= 12 && s_prev <= 100 && onscreen <= 8) {
+          s_drop_frame = snes_frame_counter; s_drop_prev = s_prev;
+          fprintf(stderr, "[oamvar] PRE  f=%d on=%d 1F11=%02X 0BCF=%02X 1F9A=%02X E4=%02X E5=%02X\n", OAMDBG_VARS);
+          /* Dump the 128 OAM Y bytes so we see WHICH slots parked (X/HUD-
+           * specific = low slots vs pool-overflow = high slots). */
+          fprintf(stderr, "[oamY] DROP f=%d:", snes_frame_counter);
+          for (int i = 0; i < 128; i++)
+            fprintf(stderr, "%02X", g_ram[(0x0700 + i * 4 + 1) & 0x1FFFF]);
+          fprintf(stderr, "\n");
+          fflush(stderr);
+        }
+      } else if (onscreen >= 12) {
+        fprintf(stderr, "[oamY] REC  f=%d:", snes_frame_counter);
+        for (int i = 0; i < 128; i++)
+          fprintf(stderr, "%02X", g_ram[(0x0700 + i * 4 + 1) & 0x1FFFF]);
+        fprintf(stderr, "\n");
+        fprintf(stderr, "[oamvar] REC  f=%d on=%d 1F11=%02X 0BCF=%02X 1F9A=%02X E4=%02X E5=%02X\n", OAMDBG_VARS);
+        fprintf(stderr, "[oamdrop] TRANSIENT collapse@%d (%d->~0) recovered@%d ; froze ring\n",
+                s_drop_frame, s_drop_prev, snes_frame_counter);
+        fflush(stderr);
+        g_boundary_frozen = 1;
+      } else {
+        fprintf(stderr, "[oamvar] DROP f=%d on=%d 1F11=%02X 0BCF=%02X 1F9A=%02X E4=%02X E5=%02X\n", OAMDBG_VARS);
+        fflush(stderr);
+        if (snes_frame_counter - s_drop_frame > 12) s_drop_frame = -1;
+      }
+      s_prev = onscreen;
+    }
+#endif
     g_snes->inNmi = true;
     /* Option-1 cpu->S ABI: model the hardware NMI-entry push so the
      * handler's RTI has a frame to pop (paired with cpu_state.h's RTI
