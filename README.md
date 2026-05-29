@@ -31,9 +31,6 @@ recovers from heavy sprite/OAM load instead of stalling.
 
 **Known issues at this release (minor, non-blocking):**
 
-- Brief, self-recovering sprite/HUD dropout immediately after a fish
-  explosion (a transient heavy-OAM collapse that recovers on its own).
-  See `ISSUES.md`.
 - Isolated rough edges in sprite-mode timing / HDMA windowing / BG
   layer priority in a few spots.
 
