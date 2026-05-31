@@ -29,14 +29,47 @@
 
 ### Scene-transition reveal desynced from BG load — highway BG "loads in late" + boss-select fade off (filed 2026-05-30)
 
-**Status: OPEN — root cause identified at the class level; exact gating
-site + fix pending.** Investigated on the `mmx-highway-loadin` worktree
-(Oracle build off v1.0.0 baseline snesrecomp `926d61e`; debug server
-port 4379). **User-confirmed: this is ONE root cause behind TWO reported
-symptoms** — the highway-intro BG "loads in slow/late" AND the
-stage-end → boss-select "black screen longer than normal + fade-in a
-bit off." Both are scene transitions where the screen **reveal (INIDISP
-brightness ramp) is decoupled from DMA-load completion**.
+> #### ⭐ DECISIVE UPDATE (2026-05-30, session 3) — NOT a presentation bug; build-in is a recomp m/x divergence, PROVEN against real hardware
+>
+> A clean-session re-verification (full investigation in
+> `## Session-3 decisive findings` below) **overturns** the
+> "authentic? / scheduler faithful" stalemate the earlier sub-sections
+> below reached. Summary:
+> 1. **PPU presentation path is CORRECT** — renderer honors forced-blank
+>    (`ppu.c:652`) and brightness (`ppu.c:102`, scale `b/15`); present
+>    runs `I_NMI → MmxSchedulerTick → MmxDrawPpuFrame` and the draw never
+>    writes `$2100`, so the once-per-frame ring samples render-time state.
+>    At every bad frame **`inidisp == $00B3 == 0x0f`** — no forced-blank,
+>    no brightness fade, no stale register. Hyp A/B/C all FALSIFIED.
+> 2. **The build-in is NOT authentic.** A snes9x oracle driven from COLD
+>    BOOT (now possible — see tooling fixes below) shows the real ROM
+>    revealing the highway with the **full city BG + HUD already present**
+>    (no black chunks), then READY. The recomp reveals foreground-only and
+>    streams the city BG in over ~200 frames before HUD/READY.
+> 3. **Root cause localized:** the `$00B3` fade curve is faithful
+>    (identical 2-frame/step cadence recomp vs oracle), but load-vs-reveal
+>    is **reordered**: hardware = `load → delay → bulk-load → fade-in`;
+>    recomp = `load → fade-in → delay → bulk-load`. Only Task0 (`$852C`)
+>    + the vblank task run; Task0's yield variant **flips `M0X1`↔`M1X1`**
+>    through the window → an **m/x-flag divergence** (same class as the
+>    ecosystem ALttP regression) takes a wrong-width branch in Task0's
+>    intro path that puts the fade ahead of the bulk load.
+> 4. **Fix is recompiler-class** (m/x propagation in Task0's intro path),
+>    NOT display-side and NOT stage-specific. Next: from-boot m/x
+>    first-divergence trace, recomp vs the now-working oracle.
+>
+> The sub-sections below this (sessions 1–2) are RETAINED for history but
+> their "is it authentic / scheduler is faithful" conclusions are
+> **superseded** by the hardware reference above.
+
+**Status: OPEN — root cause class PROVEN (recomp m/x divergence reorders
+fade ahead of bulk BG load; hardware loads-under-blank-then-reveals);
+exact wrong branch + fix pending.** Investigated on the
+`mmx-highway-loadin` worktree (Oracle build off v1.0.0 baseline
+snesrecomp `926d61e`; debug server port 4379). **User-confirmed: this is
+ONE root cause behind TWO reported symptoms** — the highway-intro BG
+"loads in slow/late" AND the stage-end → boss-select "black screen longer
+than normal + fade-in a bit off."
 
 #### Symptom
 
@@ -221,6 +254,185 @@ kept. Tracer is always-on.)
 Diagnostic env + helpers (`_dbg/_shot/_timeline.ps1`, the always-on
 `trace_vram` + FrameRecord rings, `last_vram_write_to`) documented in
 the per-user memory `project_mmx_worktree_diag_env`.
+
+#### REVISED MODEL (2026-05-30, session 2) — scheduler is FAITHFUL; the load is Task0's own interleaved sequence
+
+New per-frame instrumentation (committed below) overturns the
+"scheduler/NMI-cadence divergence" premise above. **There is no
+scheduler stall and no glue-level cadence to correct.**
+
+Instrumentation added (all always-on rings; extend, don't arm):
+- `loadin_slots <from> <to>` (debug_server.c): per-frame snapshot of the
+  7 cooperative-scheduler task slots (`pc/state/countdown`), the `$00B3`
+  fade shadow, AND the slot-0 (Task0) **yield-site call path** captured in
+  `mmx_host_yield` (`mmx_rtl.c` `g_slot0_yield_stk[3]`, named via
+  `g_last_recomp_func`/`g_recomp_stack`).
+- `mmx_get_slot_debug()` (mmx_rtl.c) exposes the C-host slot fiber PCs.
+
+Findings (fresh from-boot capture, highway reveal ≈ f905, one run):
+1. **No task waits on a long countdown.** Across the entire load window
+   only slot 0 = Task0 (`$852C`, `st2/cd1` — wakes every frame) and slot
+   6 = the vblank task (`$B25B`) are active. The ~90-frame gaps between
+   upload batches are **Task0 sitting in `bank_00_B2EB`** (a scripted
+   intro *delay* routine) yielding one frame at a time — the game's own
+   pacing, faithfully resumed 1 host-frame : 1 game-frame.
+2. **The load order is intrinsic to Task0's instruction stream.** The
+   highway tileset loaders — `bank_00_8A45` (DMA helper) called by
+   `bank_00_94E7 / _991B / _9989` — run **after** the blocking fade-in
+   `bank_00_8973` (which yields `YieldNFrames(cd2)`, 2 frames/step, ~28
+   frames). So cityscape (`bg_hi` 8192×3) + foreground/overpass (`bg_lo`
+   18944) necessarily upload onto an **already-lit** screen. Sequence:
+   under-blank load (`f649–878`) → fade-in (`8973`) → reveal `f905` →
+   post-reveal load (`94E7/991B/9989`, `f1007–1105`) → camera pan
+   (`vScroll 0→256`, BG column-streams as it pans).
+3. **Frame-relative timing matches hardware.** Fade and delays are
+   frame-counted via the yield primitives; the cooperative scheduler
+   burns exactly one host frame per yield. The recomp is NOT "running
+   faster" in frame terms here. The one genuine recomp/HW difference —
+   **synchronous (instant) DMA** — would make the load finish *earlier*,
+   not later, so it does not explain the late content.
+
+Visual ground truth (screenshot ring, `_seq_*.png`): at reveal the green
+highway *foreground* is complete but the *sky* has large black unloaded
+tile chunks that fill in over ~1 s (k170→k176) — matches the report.
+
+**Option 1 / 3 (hold the reveal blank) is self-defeating.** It fixes
+"BG builds in late" by *adding* a black hold — which is exactly the
+*other* reported symptom ("boss-select black screen too long"). And the
+load is interleaved with the **intended camera-pan intro** (content is
+*meant* to stream in as the camera pans up), so a blanket hold would
+black out animation that should be seen. So a display-side hold is out.
+
+**A-vs-B is genuinely unresolved** (oracle unavailable — desyncs from the
+HLE'd boot): (A) authentic intro behavior the recomp reproduces
+faithfully (argues: faithful scheduler, frame-deterministic sequence,
+fixed `B2EB` delays), vs (B) a recomp control-flow/width divergence that
+defers the highway load past the reveal (argues: the black regions are
+large and persist ~1 s — more than CRT blur would mask — and the user +
+a YouTube ref say hardware shows it complete at reveal). No evidence of a
+wrong branch was found, but it wasn't ruled out. The only *true* fix is
+(B) — making the load complete before reveal (content arrives earlier; no
+added black) — which is recompiler-class, risky to the playable build,
+and may find nothing.
+
+#### Targeted cosmetic attempt (2026-05-30, session 2) — implemented, env-gated OFF
+
+User elected to try a targeted display-side reveal-hold anyway. Built it
+(`mmx_rtl.c` `mmx_reveal_hold_tick` + an `inidisp`-override at render in
+`MmxDrawPpuFrame`; arms on the blank→fade signature gated by a stage-sized
+under-blank BG load so it can't fire in gameplay; reads always-on
+`g_loadin_bg_*_last`). Instrumented its state into the `loadin_get` ring
+(`rh`/`rhload`) and measured it from boot. **Outcome: not a clean win.**
+
+- The highway is revealed, then its BG keeps loading in batches separated
+  by long (~90-frame) scripted `B2EB` delays, right up to the camera pan
+  (`vScroll→256`). Releasing after the first cityscape batch reveals mid-
+  load (build-in just moves later); the only clean "assembled, now it
+  animates" boundary is the pan. Holding to the pan = **~3-5 s of black**,
+  which recreates the "black screen too long" complaint. There is no
+  short-black variant that hides the build-in.
+- The arming screens are all the highway itself (verified by screenshot:
+  the pre-resolve frames already show the highway with the black-chunk
+  sky), so it does not wrongly blank a separate logo/title — but the black
+  duration alone makes it a poor trade.
+
+**Left in tree, DISABLED by default**, env-gated `MMX_REVEAL_HOLD=1`, so
+the intro can be A/B'd live by eye. Recommendation: treat the build-in as
+authentic progressive load and ship with the hold OFF, unless a live A/B
+shows the long-black version is preferable. The diagnostic instrumentation
+(`loadin_slots`, per-slot scheduler state, Task0 yield call-paths,
+`rh`/`rhload`) is the durable value from this session and is kept.
+
+#### Session-3 decisive findings (2026-05-30) — presentation falsified; hardware reference obtained
+
+Clean-session re-verification. Tools: per-frame `loadin_get`/`loadin_slots`
+rings (sampled post-NMI/post-scheduler, i.e. render-time state) + a
+from-cold-boot **snes9x oracle** (made usable this session — see below).
+
+**1. PPU presentation path is CORRECT (Hyp A/B/C falsified).**
+- Renderer honors forced-blank — `PpuDrawWholeLine` (`ppu.c:652`)
+  `memset`s the line to black when `PPU_forcedBlank`; and brightness —
+  `brightnessMult[i] = ((i<<3)|(i>>2)) * brightness / 15` (`ppu.c:102`),
+  so brightness 0 → black. Both correct.
+- Frame loop (`mmx_rtl.c`): `MmxRunOneFrameOfGame` = `I_NMI` (flush prev
+  frame's DMA queue + restore `$2100` from `$00B3`) → `MmxSchedulerTick`
+  (run game tasks, queue next DMA) → host calls `MmxDrawPpuFrame`.
+  `MmxDrawPpuFrame` renders 225 scanlines and **never writes `$2100`**, so
+  the per-frame ring's `inidisp` IS the render-time value. The NMI's
+  per-frame `LDA #$80;STA$2100` force-blank is restored before the draw
+  AND before the sample — it does not create a present bug.
+- Bad-window frame table (recomp, one cold-boot run; `inidisp`==`$00B3`
+  every row → no fade/blank, no stale register):
+
+  | frame | $00B3 | INIDISP | bg_lo | bg_hi | vScroll | oam | kind |
+  |---|---|---|---|---|---|---|---|
+  | 1002 | 0x0f | 0x0f | 0 | 0 | 0 | 16 | (post-fade, HUD building) |
+  | 1003 | 0x0f | 0x0f | 512 | 0 | 0 | 0 | BG_LOADED_NO_HUD |
+  | 1004 | 0x0f | 0x0f | 0 | 8192 | 0 | 0 | cityscape on lit screen |
+  | 1101 | 0x0f | 0x0f | **18944** | 0 | 0 | 0 | **FG bulk on lit screen** |
+  | 1118 | 0x0f | 0x0f | 0 | 8192 | 0 | 0 | cityscape on lit screen |
+  | 1124 | 0x0f | 0x0f | 0 | 288 | 256 | 0 | camera-pan stream |
+
+  → the bad frame is full-brightness rendering of genuinely-unloaded VRAM,
+  not a missed blank. Presentation is innocent.
+
+**2. The build-in is NOT authentic — hardware reference.** Real ROM via
+the snes9x oracle, cold boot (color-corrected screenshots `_on_036..046`):
+the opening Highway appears with the **complete distant city skyline + HUD
+already present**, then "READY" — no black chunks, no visible build-in.
+The recomp instead reveals FG-only, no HUD, then streams the city BG in
+(black chunks) over ~200 frames before HUD/READY. So the recomp presents
+intermediate load frames hardware never shows.
+
+**3. Root cause localized — m/x divergence reorders fade vs load.** The
+`$00B3` fade curve is faithful: recomp and oracle both step `0x02→0x0f` at
+exactly **2 frames/step** over ~26 frames, with identical blank→fade→
+hold→fadeout cycle structure (recomp `_hw_loadin.json` b3 vs oracle
+`_oracle_b3.json`). What diverges is **load-vs-reveal order**:
+- Hardware: `partial load (under 0x80) → ~125f delay → BULK load (still
+  under 0x80) → fade-in → reveal complete`.
+- Recomp: `partial load (under 0x80) → fade-in (reveal) → ~125f delay →
+  BULK load (FG 18944 @ ~f1047/1101, cityscape after) on a LIT screen`.
+
+  `loadin_slots` across the window: only **slot 0 = Task0 (`$852C`)** and
+  the vblank task (`$B25B`) are ever active; Task0 does the loads itself,
+  paced by `YieldOneFrame`/`YieldNFrames`. Task0's yield **variant flips
+  `M0X1`↔`M1X1`** frame-to-frame (e.g. f1047 bulk load = `M0X1`, f950/1064
+  cityscape = `M1X1`) — the **m-flag is toggling**. An m/x-flag (wrong-
+  width) divergence in Task0's intro path takes a different branch than
+  hardware, putting the blocking fade-in (`bank_00_8973`) *ahead* of the
+  bulk tileset loaders (`bank_00_94E7/_991B/_9989` → `_8A45`). This is the
+  **same class as the ecosystem ALttP m/x-dispatch regression**
+  (see per-user memory `project_alttp_dispatch_regression`).
+
+This **invalidates the session-1/2 "load order is intrinsic to Task0's
+instruction stream / scheduler is faithful" conclusion**: the oracle runs
+the SAME ROM/Task0 and loads-before-reveal, so the recomp must be running a
+DIFFERENT branch (m/x), not the same stream at a different cadence.
+
+**4. Oracle made usable from cold boot (reusable tooling).** Prior
+sessions reported "oracle desyncs to garbage." Cause found + fixed:
+- `main.c` `emu_oracle_run_frame` passed the runner's **12-bit** per-player
+  input word (B=0x001…START=0x008…R=0x800; see `debug_server.c`
+  `k_controller_names`) straight to `snes9x_bridge`, which reads `s_joypad`
+  in **SNES 16-bit** order (B=15…START=12…R=4). START never reached the
+  oracle → real-ROM boot couldn't be navigated. Added
+  `mmx_runner_to_snes_joypad()` remap. The from-boot oracle is the
+  **legitimate** case (only the save-state repros are unfollowable);
+  `EnableSnes9xOracle` left `false` by default (flip to `true` for a
+  reference run).
+- `snes9x_bridge.cpp` `retro_video_refresh`/`emu_screenshot` assumed
+  XRGB8888 but snes9x emits **RGB565** → garbled/wrong-colour oracle
+  screenshots. Now honors the format the core requests via
+  `SET_PIXEL_FORMAT` (RGB565/0RGB1555/XRGB8888). Oracle screenshots are
+  now correct.
+
+**Next (the real fix):** from-boot m/x first-divergence trace, recomp vs
+the now-working oracle, to find the exact wrong-width branch in Task0's
+highway-intro path. Then fix m/x propagation at that site (recompiler-
+class). Guard SMW/ALttP. Capture scripts: `_cap_highway.ps1` (recomp
+filmstrip + loadin), `_oracle_nav.ps1` (oracle filmstrip + b3 timeline),
+`_cap_slots.ps1` (loadin_slots window).
 
 ### Music-rate ticking + occasional off-tune audio — dual-producer APU sample drop (filed 2026-05-30)
 

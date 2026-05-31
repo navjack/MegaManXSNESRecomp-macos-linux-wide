@@ -303,6 +303,28 @@ void RtlDrawPpuFrame(uint8 *pixel_buffer, size_t pitch, uint32 render_flags) {
     memcpy((uint8 *)pixel_buffer + y * pitch, g_my_pixels + y * 256 * 4, 256 * 4);
 }
 
+#ifdef ENABLE_ORACLE_BACKEND
+/* Remap the runner's 12-bit per-player input word to the SNES hardware
+ * joypad bit order the snes9x bridge expects. See the emu_oracle_run_frame
+ * call site for the bit layouts and rationale. */
+static uint16_t mmx_runner_to_snes_joypad(uint16_t r) {
+  uint16_t s = 0;
+  if (r & 0x001) s |= 0x8000; /* B      */
+  if (r & 0x002) s |= 0x4000; /* Y      */
+  if (r & 0x004) s |= 0x2000; /* SELECT */
+  if (r & 0x008) s |= 0x1000; /* START  */
+  if (r & 0x010) s |= 0x0800; /* UP     */
+  if (r & 0x020) s |= 0x0400; /* DOWN   */
+  if (r & 0x040) s |= 0x0200; /* LEFT   */
+  if (r & 0x080) s |= 0x0100; /* RIGHT  */
+  if (r & 0x100) s |= 0x0080; /* A      */
+  if (r & 0x200) s |= 0x0040; /* X      */
+  if (r & 0x400) s |= 0x0020; /* L      */
+  if (r & 0x800) s |= 0x0010; /* R      */
+  return s;
+}
+#endif
+
 static void DrawPpuFrameWithPerf(void) {
   int render_scale = PpuGetCurrentRenderScale(g_ppu, g_ppu_render_flags);
   uint8 *pixel_buffer = 0;
@@ -941,15 +963,21 @@ error_reading:;
     RtlRunFrame(inputs | GetActiveControllers() | debug_server_get_controller_active_mask());
 
 #ifdef ENABLE_ORACLE_BACKEND
-    // Step the oracle emulator with the same input. First-light does
-    // not guarantee input-bit parity between the runner's 12-bit-per-
-    // player layout and the bridge's SNES-hardware layout — good
-    // enough for attract-demo comparison (no input), needs remapping
-    // work before live gameplay divergence analysis.
+    // Step the oracle emulator with the same input. The runner's per-player
+    // input word is a 12-bit layout (B=0x001,Y=0x002,SELECT=0x004,
+    // START=0x008,UP=0x010,DOWN=0x020,LEFT=0x040,RIGHT=0x080,A=0x100,
+    // X=0x200,L=0x400,R=0x800 — see debug_server.c k_controller_names),
+    // but snes9x_bridge reads s_joypad[] in SNES hardware bit order
+    // ($4218/$4219: B=15,Y=14,SELECT=13,START=12,UP=11,DOWN=10,LEFT=9,
+    // RIGHT=8,A=7,X=6,L=5,R=4). Without this remap, START (runner bit 3)
+    // lands on an unused bridge bit and the real-ROM boot can't be
+    // navigated — the "oracle desyncs to garbage" failure prior sessions
+    // hit. Remap so a from-boot highway reference is reachable (legitimate
+    // use; the disabled path is only the save-state repros).
     {
       extern void emu_oracle_run_frame(uint16_t j1, uint16_t j2);
-      emu_oracle_run_frame((uint16_t)(inputs & 0xFFF),
-                           (uint16_t)((inputs >> 12) & 0xFFF));
+      emu_oracle_run_frame(mmx_runner_to_snes_joypad((uint16_t)(inputs & 0xFFF)),
+                           mmx_runner_to_snes_joypad((uint16_t)((inputs >> 12) & 0xFFF)));
     }
 #endif
 
