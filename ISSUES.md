@@ -427,12 +427,32 @@ sessions reported "oracle desyncs to garbage." Cause found + fixed:
   `SET_PIXEL_FORMAT` (RGB565/0RGB1555/XRGB8888). Oracle screenshots are
   now correct.
 
-**Next (the real fix):** from-boot m/x first-divergence trace, recomp vs
-the now-working oracle, to find the exact wrong-width branch in Task0's
-highway-intro path. Then fix m/x propagation at that site (recompiler-
-class). Guard SMW/ALttP. Capture scripts: `_cap_highway.ps1` (recomp
-filmstrip + loadin), `_oracle_nav.ps1` (oracle filmstrip + b3 timeline),
-`_cap_slots.ps1` (loadin_slots window).
+**Next (the real fix) + the trap to avoid:** find the exact wrong-width
+branch in Task0's highway-intro path that puts the fade ahead of the bulk
+load, then fix m/x propagation at that site (recompiler-class). Guard
+SMW/ALttP.
+
+- **`find_first_divergence` does NOT work here (trap).** It diffs recomp
+  WRAM vs oracle WRAM *at the same input-frame assuming lock-step game
+  state* — but the recomp HLE-boots while the oracle real-boots, so at any
+  given frame the two are at **different game moments**. The diff would
+  report a huge "divergence" that is just content mismatch (exactly the
+  failure the `EnableSnes9xOracle=false` rationale warns about). The oracle
+  is the GROUND-TRUTH *reference* (BG-loads-before-reveal, proven by
+  screenshot), NOT a per-frame lock-step comparator for MMX.
+- **Use the recomp-side boundary ring vs the ROM disasm instead.** Build a
+  ROM disasm of Task0's highway stage-init (the fade `$8973` lives at the
+  `JSR $8570` site; the loaders `$94E7/_991B/_9989→$8A45` are a separate
+  GameMode-driven phase). Capture the always-on boundary ring frozen at the
+  highway window (`freeze_at_frame <N>` near the under-blank→fade boundary,
+  ~f850–1050; set `SNESRECOMP_BOUNDARY_RING_ENTRIES=8388608`), and find the
+  function that ENTERS m=1 but EXITS m=0 (the proven D56F-style PLP/PLD
+  m-flip technique) OR the conditional whose width-wrong compare takes the
+  branch that sequences fade-before-load. Then fix the m/x propagation at
+  that emit site.
+- Capture scripts (gitignored `_*`): `_cap_highway.ps1` (recomp filmstrip
+  + loadin), `_oracle_nav.ps1` (oracle filmstrip + `$00B3` timeline),
+  `_cap_slots.ps1` (loadin_slots window).
 
 ### Music-rate ticking + occasional off-tune audio — dual-producer APU sample drop (filed 2026-05-30)
 
