@@ -302,6 +302,9 @@ static bool HandleIniConfig(int section, const char *key, char *value) {
       return ParseBool(value, &g_config.enable_gamepad[0]);
     } else if (StringEqualsNoCase(key, "EnableGamepad2")) {
       return ParseBool(value, &g_config.enable_gamepad[1]);
+    } else if (StringEqualsNoCase(key, "GamepadDeadzone")) {
+      g_config.gamepad_deadzone = (int)strtol(value, (char**)NULL, 10);
+      return true;
     } else {
       for (int i = 0; i < countof(kKeyNameId); i++) {
         if (StringEqualsNoCase(key, kKeyNameId[i].name)) {
@@ -431,6 +434,7 @@ void ParseConfigFile(const char *filename) {
    * = false` in mmx.ini overrides this. */
   g_config.enable_gamepad[0] = true;
   g_config.enable_gamepad[1] = true;
+  g_config.gamepad_deadzone = 10000;
   /* Default ON to preserve current behaviour across other ports that
    * share this framework code; per-game .ini sets it false where the
    * oracle is incompatible with the repro workflow. See config.h doc. */
