@@ -43,8 +43,11 @@ fi
 step() { echo; echo "=== $* ==="; }
 
 step "Regenerating banks"
+# --prefix mmx: emit mmx_NN_v2.c / mmx_dispatch_v2.c. The Windows MSBuild
+# project (src/mmx.vcxproj) lists these gen files by name, so the prefix
+# must match. The CMake build globs src/gen/*.c and is naming-agnostic.
 "$PYTHON" snesrecomp/tools/v2_regen.py --rom "$ROM" \
-    --cfg-dir recomp --out-dir src/gen
+    --cfg-dir recomp --out-dir src/gen --prefix mmx
 
 step "Syncing funcs.h"
 "$PYTHON" snesrecomp/tools/v2_sync_funcs_h.py --cfg-dir recomp \
