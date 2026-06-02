@@ -1,10 +1,27 @@
 # Issues — MegamanXRecomp
 
-> **OPEN:** one rendering issue.
+> **OPEN:** one issue.
 > 1. A BRIEF sprite/OBJ-layer + HUD dropout under heavy sprite load (X, the
 >    fish, and the HUD vanish for a moment after a fish explosion, then
 >    re-appear). Transient, self-recovering; the digger-area artifacting is
 >    the same class. See "Open" below.
+>
+> **RESOLVED (2026-06-02), released in `v1.0.5`:** **Rangda Bangda blue eye
+> flies ~17× too far / off-map, stalling the fight.** Root cause was NOT the
+> eye position (it is correctly level-absolute) and NOT a coordinate-space
+> mismatch — both earlier framings are refuted. The recompiled
+> `JSL $80CE9A` (the distance routine that sets the eye's fly-timer) was a
+> runtime `(m,x)` dispatch switch **missing the `M0X1` case**: the
+> emit-truth variant-prune pass dropped CE9A's `M0X1` variant (it
+> static-decodes to garbage under x=1, and clean siblings exist) and the
+> dispatch `default` **silently no-op'd** instead of calling the function.
+> At the eye launch the flags are exactly m=0,x=1, so **CE9A never ran**;
+> `$0000` kept the staged `eyeX` (≈5192) and the fly-timer became
+> `eyeX>>1 ≈ 2596` (~43 s) instead of `dist(102)>>1 ≈ 51`. Framework fix in
+> `snesrecomp/recompiler/v2/codegen.py`: a reached-but-pruned dispatch combo
+> now routes to the nearest surviving clean variant instead of no-op'ing
+> (applied to all four (m,x)-dispatch emit sites). General defect, not
+> Rangda-specific. User-confirmed in-game. See the resolved write-up below.
 >
 > **RESOLVED (2026-06-01), released in `v1.0.4`:** **Spark Mandrill turtle
 > invisible on dash-jump.** Root cause was NOT a VRAM-DMA throttle (the
@@ -44,6 +61,446 @@
 ---
 
 ## Open
+
+### Rangda Bangda (eye/nose wall boss, Sigma stage 2) — blue eye flies ~17× too far (filed 2026-06-01) — ✅ FIXED 2026-06-02, released `v1.0.5`
+
+> **✅ RESOLVED (2026-06-02), released in `v1.0.5`. Reported by
+> [@TechnicallyComputers](https://github.com/TechnicallyComputers).**
+> Root cause is a **recompiler call-dispatch defect** — NOT the eye position
+> and NOT a coordinate-space mismatch (both earlier framings below are
+> REFUTED by the decisive capture).
+>
+> **The decisive capture (block-watch at the staging-only block entries
+> `$08:AEDD`/`$08:AF12`, slot-0 launch, eye object base `D=$0EE8`):** the
+> inputs `AED9` stages for `CE9A` are all correct and level-consistent —
+> `eyeX (D+$05) = 5192`, `eyeY (D+$08) = 83`, `tgtX ($0BAD) = 5147`,
+> `tgtY ($0BB0) = 175` ⇒ true distance ≈ **102**, expected fly-timer ≈ **51**.
+> But `$0000` *after* `JSL $80CE9A` still read **5192** (= the un-overwritten
+> `eyeX`), and the stored fly-timer `D+$34` was `0x0A24 = 2596 = 5192>>1`.
+> A block-watch at CE9A's entry block (`0x00CE9A` and the `$80` mirror) had
+> **hit_count = 0** while staging fired — proving **`JSL $80CE9A` never
+> dispatched to `CE9A`.**
+>
+> **Root cause.** The recompiled `JSL $80CE9A` is a runtime `(m,x)` dispatch
+> `switch (((m&1)<<1)|(x&1))` with cases for the surviving variants only —
+> `case 0 (M0X0)`, `case 2 (M1X0)`, `case 3 (M1X1)` — and
+> `default: _r = RECOMP_RETURN_NORMAL;`. The emit-truth variant-prune pass
+> had dropped CE9A's **`M0X1`** variant (it static-decodes to garbage under
+> the x=1 entry assumption and has clean siblings), then *assumed a pruned
+> `(m,x)` combo is never reached at runtime.* At the eye launch `AED9` does
+> `REP #$20` (m=0) but never touches x (x=1), so the JSL hits **case 1 =
+> M0X1 → `default` → CE9A is silently skipped.** `$0000` keeps the staged
+> `eyeX`, and `AED9`'s `LDA $0000 / LSR / STA $34` makes the fly-timer
+> `eyeX>>1` (~43 s of flight). CE9A's own early `REP #$30` normalizes width,
+> so it would have executed correctly from *any* entry — the static
+> "M0X1 is unreachable garbage" conclusion was unsound.
+>
+> **Fix (framework, `snesrecomp/recompiler/v2/codegen.py`).** The runtime
+> dispatch is the one place the actual `(m,x)` is known, so a reached-but-
+> pruned combo (and the `default`) now routes to the **nearest surviving
+> clean variant** instead of `RECOMP_RETURN_NORMAL`. The prune guarantees a
+> clean sibling exists; routing there only changes behaviour on the path the
+> old `default` no-op would have taken — exactly the broken case. Applied to
+> all four `(m,x)`-dispatch emit sites (direct JSL/JSR + the two indirect-
+> dispatch paths). Regenerated all banks, rebuilt Debug + Production; the
+> generated `JSL $80CE9A` now emits `case 1: _r = bank_00_CE9A_M0X0(cpu);`.
+> The blue eye flies a short hop, returns to its socket, and the fight
+> proceeds (user-confirmed in-game). General defect — any
+> reached-but-pruned dispatch combo was previously a silent no-op.
+>
+> ---
+>
+> _Investigation trail below (several SUPERSEDED hypotheses retained for the
+> record — the screen-vs-level and "+0x400 discontinuity" leads are both
+> wrong; see the RESOLVED block above)._
+>
+> ---
+>
+> **Symptom.** Rangda Bangda has three eyes (red, blue, green) and a nose;
+> which one activates is RNG. Red and green eyes stay put; the **blue eye
+> homes toward X**, and is supposed to hit a boundary (wall/floor),
+> **bounce, and return to its socket**, after which the next part (another
+> eye or the nose) takes its turn. In the recomp the blue eye **overshoots
+> the boundary and keeps travelling in its facing direction, off-screen**.
+> It does *eventually* return — but only after **~60+ seconds** of waiting
+> (vs ~1-2 s expected) — and the fight stalls: no follow-up eye/nose acts,
+> and X is never threatened. **Recomp-only divergence.**
+>
+> **Success criteria for a fix:** the blue eye returns promptly after the
+> boundary, AND a subsequent part acts (X may take damage / die in the
+> process). If X takes no damage and nothing happens after the first blue
+> eye, it's still broken.
+>
+> **Repro (deterministic).** `loadstate 0` — save slot 0 has the RNG
+> already rolled so the blue eye always activates and moves toward X. **No
+> button inputs required.** Save slot 1 is just before entering the room
+> (to re-roll RNG or to validate a fix from a clean entry, in case slot 0's
+> state has already-loaded code/state that masks a fix).
+>
+> ⚠️ **Savestate caveat (see the turtle write-up + memory):** `loadstate`
+> into a *fresh* mmx.exe doesn't restore the Win32-fiber cooperative-
+> scheduler state, so boss-room tasks may restart-from-entry / desync.
+> Reproduce in a warm session (drive in, or load while the boss room is
+> already live), or treat a fresh-process load with suspicion.
+>
+> **RNG note (user):** slot 0 is rolled so BOTH the first and second eye
+> are blue — so one load shows: eye spawns → flies into X → flies off →
+> (~60 s later) returns → second blue eye does the same from the other
+> socket. Good for fix-verification: watch eye #2 (or reload for eye #1)
+> bounce promptly.
+>
+> #### Diagnosis progress (2026-06-01, Debug build, debug server :4379)
+>
+> Eye object **fully localized** (via `wram_writes_at` write-log on the
+> always-on ring):
+> - Struct base **`$7E:0EEB`**. **X position = `$0EEF`** (`D+0x04`, 16-bit)
+>   with high byte `$0EF1` (`D+0x06`) — a **24-bit** coordinate. **X
+>   velocity = `$0F05`** (`D+0x1a`), sign byte `$0F06` (`D+0x1b`); second
+>   axis at `D+0x07`/`D+0x1c`.
+> - Mover = **`bank_02_820A`** (generic `pos += vel` integrator: `D+0x04 +=
+>   D+0x1a`, carry into `D+0x06`). Eye AI = **`bank_08_AF21`** — a state
+>   machine that runs `820A` then jumps to a state handler (`$08:DB4B /
+>   DB8A / DBA9 / DBE0 / DBF5 / DC2D / DC71`). Boundary/bounce belongs in
+>   the "flying" handler.
+> - **KEY FINDING:** during the flight, X position increments by a constant
+>   **`0x178`/frame** (perfectly linear) and **velocity `$0F05` is NEVER
+>   written** — i.e. the bounce branch that should negate velocity is never
+>   taken. The 24-bit X just integrates until some far-away limit
+>   eventually returns the eye (~60 s), consistent with the user's
+>   overflow/int-limit intuition.
+> - So the bug is in the flying-state handler's boundary check (a
+>   comparison/branch that never fires, or a collision test that the eye
+>   passes through). Suspect a recomp flag/width bug in the position-vs-
+>   bound compare (Class 4) — next step is to read the flying handler and
+>   diff against the MMX disassembly.
+>
+> #### Live-capture findings (2026-06-01, user drove the eye to fly)
+>
+> Eye AI = a nested state machine. **`bank_08_AEAD`** dispatches on the
+> eye's sub-state byte `[D+0x03]` (`JMP (table,X)`, 6 entries) →
+> `AEBE(0) / AED9(1)=launch / AF21(2)=fly / AF36(3)=reverse / …`.
+> Captured velocity `$0F05` across a real flight:
+> - launch: `AED9` sets vel = `0xFE28` (−0x1D8) — eye moves off
+> - **reverse: `bank_08_AF36` flips vel `0xFE28 → 0x01D8`** at the bounce
+> - return done: `bank_00_DB3F` zeroes vel (eye back at socket)
+>
+> **The bounce DOES fire — but ~1860 frames (~31 s) after launch** instead
+> of ~1-2 s. The flying handler (`AF21`, sub-state 2) advances the eye to
+> the reverse state (`AF36`, sub-state 3) only after a very long flight.
+>
+> **DECISION PATH INSTRUMENTED (2026-06-01) — it is a TIMER, NOT a boundary
+> (wrong-boundary hypothesis REFUTED; ASM-verified).** The fly→reverse
+> branch in `$08:AF21` reads **no** position/collision/boundary operand:
+> ```
+> AF21: JSL $82:820A            ; move (pos += vel)
+> AF25: REP#$20; DEC [D+0x34]; SEP#$20; BNE AF35   ; 16-bit fly-timer; !=0 -> keep flying
+> AF2D: [timer==0] LDA #6; STA [D+0x03] (-> AF36 reverse); LDA #$3C; STA [D+0x38]
+> AF35: RTS
+> ```
+> ROM bytes at `$08:AF21` (`22 0A 82 82 / C2 20 / C6 34 / E2 20 / D0 08 /
+> A9 06 / 85 03 / A9 3C / 85 38 / 60`) match the generated C exactly — the
+> `DEC` is genuinely 16-bit on hardware; codegen is faithful. So the eye
+> simply flies for `[D+0x34]` frames then reverses. ~31 s ⇒ timer ≈ 1860;
+> expected ≈ 108 (≈ dist-to-X 51200 sub-units ÷ vel 0x1D8) ⇒ **timer ~17×
+> too large.** (Constant velocity + single reversal already ruled out
+> "late"/throttle; the position wrapping is just a 24-bit coord growing.)
+>
+> **The timer is COMPUTED, in the launch handler `AED9`:**
+> `[D+0x34] = CE9A(...) >> 1`. `bank_00_CE9A` (`$80:CE9A`, HW-multiplier
+> math) computes `|dx|,|dy|` then a distance from inputs staged by `AED9`:
+> `$0000=[D+0x05]` (eye X), `$0004=[$0BAD]` (**target X**), `$0002=[D+0x08]`
+> (eye Y), `$0006=[$0BB0]` (**target Y**). So **fly time ∝ distance(eye,
+> target `$0BAD`/`$0BB0`)**.
+>
+> **`CE9A` FULLY DISASSEMBLED (2026-06-02) — hypothesis (iii) REFUTED.**
+> `CE9A` is a correct Euclidean `sqrt(dx² + dy²)` with a scale-to-8-bit
+> trick that makes it robust for *arbitrarily large* inputs:
+> ```
+> PHP;PHD; REP#$30; LDA#0; TCD            ; DP=0
+> A=|$00-$04|  -> $00,$04   ; |dx|   (16-bit signed sub, then abs)
+> A=|$02-$06|  -> $02       ; |dy|
+> CMP $04; if |dy|>=|dx|: $00=max(|dy|,|dx|), $02=min   ; $00=max $02=min
+> LDX#0; while(max & $FF00){ min>>=1; max>>=1; X++ }     ; scale both until max<256
+> $08=X (shift count)
+> SEP#$20; max->$4202,$4203; REP#$20; $04 = $4216 = max²  ; 8x8->16 HW mult
+> SEP#$20; min->$4202,$4203; REP#$20; A   = $4216 = min²
+> ... ADC $04 (= max²+min²), sqrt, then scale result back up by $08 shifts
+> ```
+> So `CE9A` faithfully returns the true distance even when `|dx|` is huge —
+> **there is no overflow inside it.** Given direction is correct but the eye
+> overshoots ~17×, the inflation is entirely in the **input `|dx|`/`|dy|`**,
+> not the math.
+>
+> **Behavioral model (user-confirmed, 2026-06-02):** the blue eye flies
+> *toward where X is standing at launch*; the timer `[D+0x34]=CE9A(dist)>>1`
+> is tuned with the velocity so the eye arrives **at** X after `dist/2`
+> frames, then reverses to the socket. Wrong behavior = same correct
+> direction but it **keeps going far past X** (~31 s) before returning →
+> distance is ~17× too large. Red/green eyes don't move (fine); the nose
+> moves but stays on-map (fine). **Only the blue eye is malformed.**
+>
+> **ROOT CAUSE NARROWED — coordinate-space mismatch (one of two inputs is in
+> the wrong frame of reference, recomp-only):**
+> (i) **wrong target** `$0BAD`/`$0BB0`, or
+> (ii) **wrong eye-position input** `[D+0x05]`/`[D+0x08]`.
+> Direction-correct + magnitude-17×-too-big ⇒ eye X and target X are in
+> *different* coordinate spaces (e.g. eye X screen-relative ~83 vs target X
+> level-absolute ~5143 → `|dx|≈5060`, vs the true on-screen separation of a
+> couple-hundred px). Hardware keeps them in the same space; the recomp
+> computes one wrong.
+>
+> **Live capture (2026-06-02, `tools/eye_capture.py`, slot-1 warm repro):**
+> bug reproduced — eye launched (substate→fly) and was **still flying 435+
+> frames later**, position marching by **±0x1D8/frame** (matches the launch
+> velocity). Captured targets at launch: **`$0BAD` = 5143** (0x1417,
+> level-absolute X), **`$0BB0` = 175** (0xAF, screen Y). The eye object slot
+> was **non-deterministic** (NOT the handoff's `$0EEB` this load) and the
+> position is fixed-point, so byte-level field extraction was unreliable —
+> hence the next step uses a watchpoint anchored on the actual launch write.
+>
+> **`AED9` STAGING CONFIRMED (2026-06-02, ROM disasm) — inputs are raw, no
+> camera math:**
+> ```
+> REP #$20
+> LDA $EEB7,X ; STA [D+1a]    ; X-vel from a direction table (X = quadrant)
+> LDA $EEB9,X ; STA [D+1c]    ; Y-vel
+> LDA [D+05]  ; STA $0000     ; eyeX   ─┐  CE9A inputs, verbatim —
+> LDA [D+08]  ; STA $0002     ; eyeY    ├  NO camera subtract anywhere
+> LDA $0BAD   ; STA $0004     ; targetX │
+> LDA $0BB0   ; STA $0006     ; targetY ┘
+> JSL $80CE9A
+> ```
+> So hardware REQUIRES `[D+05]` and `$0BAD` to be in the same coordinate
+> space. They are not, in the recomp.
+>
+> **Clean live capture (2026-06-02, `tools/eye_capture.py 12 45`):** eye
+> integer-X marched **83 → 468** (screen-relative, *off* the 256-wide
+> screen), eye-Y **= 94** (constant, screen-space), vel **0xFE28** (−0x1D8),
+> target `$0BAD` **= 5143** (level), `$0BB0` **= 175** (screen-Y). So the
+> **Y axis is internally consistent** (eye-Y 94 vs target-Y 175, both
+> screen) while **X is mismatched** (eye-X 83 screen vs target-X 5143 level).
+>
+> **Room fact (user, 2026-06-02): this boss room does NOT scroll** — it
+> renders one fixed screen; neither X nor the eye should ever leave screen
+> space. ⇒ camera origin is fixed at ≈ `$0BAD − Xscreen ≈ 5143 − 40 ≈ 5103`.
+> A correct eye position field would read `≈ 5103 + 83 ≈ 5186` (level), giving
+> `|dx| ≈ 43`. The recomp's eye field reads **~83 — missing the ~5103 camera
+> origin**, i.e. it's a *screen* coordinate where it should be *level*.
+>
+> **LEADING HYPOTHESIS (to be confirmed by oracle): the BLUE EYE's position
+> field is the wrong one, not `$0BAD`.** Rationale: user reports **only the
+> blue eye is malformed; the nose moves and behaves correctly.** The nose AI
+> reads the same `$0BAD` and its own position and works ⇒ `$0BAD` is correct
+> (X's true level X) and the nose's position field is level-space. The blue
+> eye's position collapses to screen-space (~83) — a missing camera-origin
+> add or an overflow/underflow in the blue-eye position path specifically.
+>
+> **NEXT (decided 2026-06-02): oracle disambiguation BEFORE touching the
+> recomp.** User will drive **mmxref** (`F:\Projects\mmxref`, frame-stamped
+> `mmx_trace.jsonl`) to a blue-eye launch in this fight. Read hardware eye
+> `[D+05]` and `$0BAD` at the launch frame:
+> - hardware eye `[D+05]` ≈ **5186** (level) ⇒ recomp eye position (83) is the
+>   bug → trace the blue-eye position init/update for the missing camera
+>   origin (compare vs the nose's path).
+> - hardware `$0BAD` ≈ **40–83** (screen) ⇒ recomp `$0BAD` is the bug instead.
+>
+> Earlier "wrong boundary / wrong-width compare" notes are SUPERSEDED — there
+> is no boundary compare. CE9A overflow is also REFUTED (it scales to 8-bit).
+>
+> #### ✅ ORACLE CONFIRMED (2026-06-02, mmxref snes9x) — root cause = recomp eye position is SCREEN-space, should be LEVEL-space
+>
+> Drove mmxref to this fight (user navigated; green→**blue (flew & RETURNED
+> correctly)**→nose), with the trace retargeted to `$0E00-$1FFF` + `$0BAD`/
+> `$0BB0` (`mmxref/frontend.cpp`, rebuilt). Tools: `tools/oracle_eye.py`,
+> `oracle_corr.py`, `oracle_level.py`. Findings:
+>
+> 1. **`$0BAD` (target X) on hardware = 5120-5149 (level-absolute) in the
+>    boss room — identical to the recomp (5143).** The `$0BAD` timeline even
+>    shows the door transition: screen-range 218→255 while X walks to the
+>    door, then a jump to 5120+ on entering the (non-scrolling) boss room. So
+>    **`$0BAD` is CORRECT in the recomp; it is NOT the bug.**
+> 2. **Hardware eye/face-piece AI positions are LEVEL-absolute** — e.g.
+>    `$00ead`/`$00eca` march **5135 → 5304** (a flying piece staying within
+>    ~160 px of the target 5143 → short flight, returns); others sit at 5192/
+>    5248/5344. They match `$0BAD`'s space, so `CE9A` gets a small `|dx|`.
+> 3. **The recomp's blue-eye AI position is SCREEN-space (~83, marching to
+>    468 off-screen)** — `|dx| = |83 − 5143| ≈ 5060` → timer ~17× too big →
+>    overshoot off-map. The recomp eye position is **missing the ~5103 level/
+>    room origin** that hardware includes.
+>
+> **ROOT CAUSE (confirmed): the recomp computes the BLUE EYE's position field
+> (the `[D+0x05]` that `AED9` feeds to `CE9A`) in screen-relative coordinates
+> instead of level-absolute — it lacks the room/level origin (~5103).** This
+> is blue-eye-specific: the nose uses level-space correctly in the recomp
+> (user: nose behaves right), so the divergence is in the blue-eye spawn/init
+> (or position-update) path, not a shared global. Likely an arithmetic
+> bug (missing `origin + offset` add, or a 16-vs-24-bit/overflow drop of the
+> high byte) in how the blue eye's level position is established.
+>
+> #### ⚠️ CORRECTION (2026-06-02 late) — the eye position is LEVEL-space, NOT screen-space
+>
+> The "eye `[D+05]` ≈ 83 screen" reading below/above was an **artifact of
+> byte-misalignment** (off-by-one struct base + fixed-point byte boundaries),
+> NOT a real screen-vs-level coordinate mismatch. Robust alignment tooling
+> (`tools/align_eye.py`, anchoring on two blue-eye-unique signatures:
+> level-range value at the socket phase AND the runaway flight) shows the
+> recomp eye's position is **level-absolute** the whole time:
+> - `$0162d`: `5112 → 5128 → 6152` — starts at the correct level socket
+>   (~5112, ≈ target `$0BAD`=5100), then a **discontinuous +0x400 jump**
+>   (high byte `0x14 → 0x18`) out to 6152 (off-screen right).
+> - `$00e9f`: `5377 → 3880` (level-space, moving).
+> So `$0BAD` is correct AND the eye position is level-space and starts
+> correct. The bug is the **discontinuous high-byte corruption at/around the
+> launch frame** (a one-time `+0x400`-ish jump), not a steady coordinate
+> space. My coarse (8-frame) snapshots step over the single launch frame
+> where `AED9` runs — need **1-frame-granularity capture through launch** to
+> catch the exact `CE9A` inputs and the moment the high byte jumps. The
+> screen-vs-level framing in the blocks below is SUPERSEDED by this.
+>
+> #### Machinery mapped (2026-06-02) — eye is created LEVEL [partially superseded — see CORRECTION above]
+>
+> Disassembled the eye spawn + move path (recomp `:4379`, tools
+> `eye_creation.py`/`eye_ce9a.py`/`recomp_level.py`):
+> - **Creation `bank_08_ACDD`** (parent `A9E0`) spawns the 2 eyes and sets each
+>   eye's position from ROM table **`$08:D4EC`** (`LDA $D4EC,Y → STA [obj+05]`
+>   X; `$D4EE,Y → [obj+08]` Y). The X value it writes is **`0x1448` = 5192
+>   (LEVEL-absolute)** — correct, matches hardware.
+> - **Mover `bank_02_820A`** (parent `AF21`/`AF42` in flight) is a **faithful
+>   24-bit fixed-point `pos += vel`** (`[obj+04].w += [obj+1a]`, carry →
+>   `[obj+06]`; Y via `[obj+07]`/`[obj+1c]`/`[obj+09]`). No bug.
+> - The recomp **does** have LEVEL-space face pieces (e.g. a word oscillating
+>   4737→5192→5033 = a piece that flew out and back in level space — the
+>   well-behaved nose). So the recomp is NOT globally screen-space.
+> - BUT the observed timer (~2530) forces `|eyeX − $0BAD(5143)| ≈ 5060`, i.e.
+>   the **blue eye's `[D+05]` is ~83 (SCREEN) at the launch frame** despite
+>   `ACDD` creating it at level 5192.
+>
+> **⇒ OPEN QUESTION (the precise bug): what changes the blue eye's `[D+05]`
+> from level (5192, at creation) to screen (~83, at launch)?** A level→screen
+> conversion clobbering the AI position field in-place, an idle/socket
+> repositioner, or a different write — blue-eye-specific (nose stays level).
+>
+> **Tooling wall hit this session (why it's not yet pinned):** (a) the eye's
+> object slot is **non-deterministic per load**; (b) the position is
+> fixed-point and base detection is **off-by-one**, so byte-level reads were
+> ambiguous/contradictory; (c) the recomp does **NOT** route low direct-page
+> scratch (`$0000-$0007`) through the traced WRAM path, so `CE9A`'s staged
+> inputs can't be read via `wram_writes_at`; (d) the game **free-runs in real
+> time and evicts the ring** during any LLM reasoning gap.
+>
+> **NEXT (recomp side, oracle gate satisfied):** reliably identify the blue
+> eye slot — e.g. `set_wram_watch` on the velocity field as it's set to
+> `0xFE28` at launch (watchpoints work; PC breakpoints don't), or detect the
+> object whose vel = `0xFE28` and whose `[D+05]` then runs off-screen — then
+> trace **that slot's `[D+05]` from creation → socket-idle → launch** to catch
+> the level→screen write and its function. Fix in the recompiler
+> (`F:\Projects\snesrecomp\snesrecomp\`)/runner — NOT generated C. Verify the
+> eye flies a short distance and returns (stays on screen); rebuild all
+> configs; re-run regression repros.
+>
+> ⚠️ **Repro is non-deterministic for automated capture:** `loadstate 0`
+> restores WRAM but not the fiber scheduler state, so the eye's **launch
+> timing drifts per load** (same caveat as the turtle). A faithful capture
+> of the bounce wants a warm/native boss fight (drive in from slot 1).
+>
+> Object-struct field offsets here (`+0x04` pos, `+0x06` pos-hi, `+0x1a`
+> vel, `+0x1b` vel-sign, `+0x07`/`+0x1c` second axis) differ from the
+> `$1028`-based layout in [[mmx-oam-object-ram-map]] — this is a different
+> object table (`$0E00`/`$1E00` regions). NOT yet root-caused.
+>
+> #### Observation-loop methodology (2026-06-02) — read before capturing
+>
+> The mechanics of driving the Debug build (`:4379`) to a flying-eye capture.
+> Learned the hard way this session; follow it to avoid losing the boss state.
+>
+> **Repro (warm/native, NOT a fresh-launch loadstate):** the exe must already
+> be in-game (live fibers) before the first `loadstate`. Then:
+> 1. `loadstate 1` — drops X **just before the door** to the boss arena.
+> 2. Single dash through the door: `set_controller a` → `step 60` →
+>    `clear_controller`. (`a` = dash, mask `0x100`.) X dashes through and
+>    **stands still** — far more predictable than holding `right`, which
+>    walks X into the floor spikes. Hold for ~1 s (≈60 frames); ONE dash only.
+> 3. The Rangda Bangda face forms (red triangle → full wall with two eyes +
+>    blue nose-triangle + boss HP bar). Which eye/nose activates is **RNG**.
+> 4. If X **dies** (boss attack / spikes) he respawns back at the door — the
+>    screenshot then shows the pre-door corridor, not the arena. That's the
+>    signal to `loadstate 1` and re-dash. **Confirm outcome via screenshot,
+>    never by asking the user.**
+>
+> **Screenshots — `tools/shot.py [out.png]`:** drives the server `screenshot`
+> command (renders the live PPU to a 24-bit BMP — NO pause needed) and
+> converts to PNG so it can be read inline. Pass the BMP/PNG path with
+> **forward slashes** — the server echoes the path verbatim into its JSON
+> reply and Windows backslashes make that invalid JSON (`\P` etc.). Capture
+> liberally and read the PNG; do not ask the user what's on screen.
+>
+> **The game free-runs continuously in real time.** `pause` is **DISABLED by
+> server policy** (the always-on-ring rule — the server replies "pause is
+> disabled by policy; query the always-on rings"). `step N` is *synchronous*
+> (blocks the TCP call until exactly N game-frames run, returns
+> `frame_before`/`frame_after`) but does **NOT** stop the game afterward
+> (`s_paused` stays 0). So between two separate tool calls the game advances
+> at ~60 fps for the entire wall-clock gap — **reading source / thinking
+> between commands burns thousands of frames and X dies** (observed
+> ~10 000-frame jumps → X dead, boss state gone). **Do the whole capture in
+> ONE tight script**: hold a single `DebugClient` connection, `loadstate` →
+> dash → loop {`step` small N → screenshot/scan} → read operands, with **no
+> LLM round-trips** in the middle. Keep total wall-clock short.
+>
+> **NEVER reset traces.** `trace_wram_reset` is the *only* thing that
+> disables the ring — it sets `active=0, nranges=0` (and was the cause of a
+> "no wram trace active" error this session, self-inflicted). The WRAM trace
+> ring is always-on, `1<<20`≈1.05M entries, self-evicting. **Arm once**
+> (`trace_wram 0e00 1fff` covers the `$0E00`/`$1E00` object tables) and never
+> reset. `loadstate` does NOT touch the trace (it only sets a pending-slot
+> flag) — verified in `cmd_loadstate`.
+>
+> **Two different frame counters — do not conflate:**
+> - The trace `f` field (and `wram_writes_at` filtering) uses the
+>   **game-internal** frame counter, which `loadstate` **restores** to the
+>   slot's saved value (slot 1 ≈ 30607) and counts up from there.
+> - `ping` / `step` / `run_to_frame` use the server's own monotonic
+>   `snes_frame_counter` (≈40 000+ this session). It does NOT reset on load.
+>   So after a `loadstate`, server frame ≈ 40 524 while trace `f` ≈ 30 607.
+>
+> **`get_wram_trace` truncates OLDEST-first — observability gap.** The broad
+> dump fills a 512 KB buffer starting at `start=0` (oldest entry) and stops
+> when full — so with ~900 K entries it only ever emits the **first ~100
+> game-frames after arming** (i.e. the dash/door-entry moment) and **never
+> reaches the recent tail** where the eye is flying. It is useless for "what
+> is moving right now." For recent data use **`wram_writes_at <hex_addr>
+> [from_frame] [to_frame] [limit]`** — per-address, 1 MB buffer, up to 4096
+> matches, scans the full ring; set `from_frame` near the *current
+> game-internal* frame to reach the tail. **TODO (proper fix, honors the
+> ring rule):** extend `get_wram_trace` to return the *window of interest*
+> (newest-first, or a frame-range/idx filter like `get_block_trace` already
+> has) so the broad discovery dump can reach the live tail. The current
+> oldest-first-then-truncate behavior violates "query the always-on ring for
+> the window of interest."
+>
+> **PowerShell pipes mangle encoding.** `dbgprobe.py raw "get_wram_trace" |
+> python tools\eye_find.py` corrupts the JSON (PS 5.1 pipes native-command
+> output as UTF-16) → `JSONDecodeError`. Use **in-process** tools that query
+> via `DebugClient` and analyze in the same Python process —
+> `tools/eye_scan.py` (ranks ring addresses by span×monotonicity; a flying
+> eye = big span + `mono`≈1.0; `mono`≈0.5 = oscillation, not a launch).
+>
+> **Still dead / still works:** PC breakpoints (`break_add`) are dead;
+> `set_wram_watch` write-watchpoints work; `pause` is disabled. Single-client
+> server — one probe at a time. `Stop-Process -Name mmx -Force` before any
+> relaunch.
+>
+> **Helper tools added this session:** `tools/shot.py` (PPU screenshot→PNG),
+> `tools/eye_scan.py` (in-process ring mover-ranking).
+>
+> **Capture status (2026-06-02):** repro + screenshot + ring tooling all
+> working; reached the fully-formed boss arena with both eyes attached.
+> Have NOT yet caught an eye *launch* (eyes were attached in every short
+> screenshot; long free-runs killed X before a launch was captured). Next:
+> single-script tight loop that dashes in and steps in small increments,
+> scanning the eye region for a launch (vel `D+0x1a` nonzero / position
+> marching) and dumping `[D+0x05]`/`[D+0x08]`, `$0BAD`/`$0BB0`, CE9A out,
+> `[D+0x34]` the instant it fires — before X can die.
 
 ### ✅ Spark Mandrill turtle renders INVISIBLE (but active) when approached via dash-jump (filed 2026-06-01) — FIXED 2026-06-01, released `v1.0.4`
 
