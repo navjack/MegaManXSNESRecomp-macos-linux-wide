@@ -19,24 +19,15 @@ similar projects: recompile the CPU, emulate the silicon.
 The ROM is **never** redistributed — you supply your own legally-dumped
 copy.
 
-## Current status: 1.0.0 — fully playable
+## Current status: 1.0.5 — fully playable
 
-Hand-verified playable end-to-end. The Option-1 `cpu->S` return-frame
-model (snesrecomp `926d61e`) resolved the heavy-load softlocks and
-fiber-scheduler lockups that capped the 0.1.x line — the game now
-recovers from heavy sprite/OAM load instead of stalling.
-
-- Boot → Capcom logo → attract intro (X on the Highway stage, Zero on
-  the motorcycle) → title screen → gameplay.
+The game has been tested and is playable end to end. 
 
 **Known issues at this release (minor, non-blocking):**
 
-- Isolated rough edges in sprite-mode timing / HDMA windowing / BG
-  layer priority in a few spots.
+No known issues at this time on Windows builds. 
 
-This is `1.0.0` — the first fully-playable release. It remains a
-recompilation project under active development; recompiler output and
-internal APIs may change between versions.
+Mac OSX/Linux are supported, but have not been extensively tested.
 
 If you hit a reproducible lockup or visual regression, please open an
 issue with a savestate (`Shift+F1`) and the frame at which it
