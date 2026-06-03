@@ -458,7 +458,7 @@ void MmxDrawPpuFrame(void) {
   }
 }
 
-void MmxRunOneFrameOfGame(void) {
+void RunOneFrameOfGame(void) {
   // First-call reset gate. Was previously `if (*(uint16*)$7F8000 == 0) I_RESET()`,
   // which silently relied on WRAM being zero-initialized at power-on. Real hardware
   // (and snes9x) power-on WRAM is 0x55, so that check would never fire and I_RESET

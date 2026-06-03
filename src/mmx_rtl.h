@@ -5,7 +5,7 @@
 #include "snes/snes_regs.h"
 
 void MmxDrawPpuFrame(void);
-void MmxRunOneFrameOfGame(void);
+void RunOneFrameOfGame(void);
 void MmxSchedulerTick(void);
 
 #endif  // SMW_SMW_RTL_H_

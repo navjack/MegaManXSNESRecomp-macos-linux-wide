@@ -3,7 +3,11 @@
 # repo evolving on its own cadence). Update via:
 #   git -C ../snesrecomp rev-parse main > /tmp/sha && \
 #     sed -i "s|^sha = .*|sha = $(cat /tmp/sha)|" snesrecomp.pin
-sha = 95c2f207379d02fe56e3ae7db0388398d82d7324
+sha = 7144d73287631c5df00943c5a17aeaa9b266a641
+# 2026-06-03 bump: snesrecomp funcs.h emitter now emits the canonical
+# per-frame entry decl `void RunOneFrameOfGame_Internal(void);` (no game
+# prefix). Game side renamed MmxRunOneFrameOfGame -> RunOneFrameOfGame to
+# match; funcs.h regenerated via v2_sync_funcs_h.py.
 # 2026-06-03 bump: lands the in-process snes9x oracle removal + the recomp_post_mortem_dump genericization.
 # Branch: main. Created 2026-06-03 — first pin file for this repo, recording
 # the snesrecomp commit MMX currently builds against. 00425c6 lands the
