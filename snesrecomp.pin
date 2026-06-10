@@ -3,7 +3,13 @@
 # repo evolving on its own cadence). Update via:
 #   git -C ../snesrecomp rev-parse main > /tmp/sha && \
 #     sed -i "s|^sha = .*|sha = $(cat /tmp/sha)|" snesrecomp.pin
-sha = 00f4adbfab0735c8e3870631fefaf16841c86248
+sha = 2b135e8f5f6acb7ec345d81ba8d0049043d5ecf4
+# 2026-06-10 bump: exe-dir anchoring. 2b135e8 adds
+# snesrecomp_anchor_to_exe_dir()/snesrecomp_abspath() to the runner
+# launcher and absolutizes the argv ROM path before caching it in
+# rom.cfg. Pairs with the game-side removal of the SwitchDirectory
+# config walk-up: config.ini now lives next to the exe, period.
+# Runner-only change: no regen required (src/gen untouched).
 # 2026-06-10 bump: audio accuracy (issue #4). 48e7260 paces APU catch-up
 # from APU-port touches only (kills the fictional SPC-cycle bursts from
 # $2118 decompression spam that overflowed the DSP output ring and ate

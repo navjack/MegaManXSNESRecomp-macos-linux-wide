@@ -44,8 +44,7 @@ typedef struct GamepadInfo {
 
 
 static void SDLCALL AudioCallback(void *userdata, Uint8 *stream, int len);
-static void SwitchDirectory();
-static void EnsureMmxIniNextToExe(const char *exe_path);
+static void EnsureConfigIni(void);
 static void RenderNumber(uint8 *dst, size_t pitch, int n, uint8 big);
 static void OpenOneGamepad(int i);
 static uint32 GetActiveControllers(void);
@@ -534,6 +533,14 @@ static void post_mortem_atexit(void) {
   recomp_post_mortem_dump("atexit", NULL);
 }
 
+/* Resolve a relative CLI path against the launch cwd before
+ * snesrecomp_anchor_to_exe_dir() redefines what relative means.
+ * Returns `buf` on success, the original pointer otherwise. */
+static const char *AbsolutizePathArg(const char *path, char *buf, size_t size) {
+  extern int snesrecomp_abspath(const char *path, char *out, size_t max_len);
+  return (path && snesrecomp_abspath(path, buf, size)) ? buf : path;
+}
+
 #undef main
 int main(int argc, char** argv) {
   signal(SIGSEGV, crash_handler);
@@ -566,20 +573,14 @@ int main(int argc, char** argv) {
 #ifdef __SWITCH__
   SwitchImpl_Init();
 #endif
-  /* Capture program path before argv shift — used to place keybinds.ini
-   * next to the executable. */
-  const char *program_path = (argc >= 1) ? argv[0] : NULL;
   argc--, argv++;
+  /* Path-carrying args are resolved against the LAUNCH cwd; the anchor
+   * below changes what relative paths mean, so absolutize them first. */
   const char *config_file = NULL;
   if (argc >= 2 && strcmp(argv[0], "--config") == 0) {
-    config_file = argv[1];
+    static char config_abs[1024];
+    config_file = AbsolutizePathArg(argv[1], config_abs, sizeof(config_abs));
     argc -= 2, argv += 2;
-  } else {
-    SwitchDirectory();
-    /* SwitchDirectory walks up 3 levels for an existing mmx.ini. If
-     * none found (typical first-launch from a release directory),
-     * write a default next to the executable and chdir there. */
-    EnsureMmxIniNextToExe(program_path);
   }
   int start_paused = 0;
   if (argc >= 1 && strcmp(argv[0], "--paused") == 0) {
@@ -588,17 +589,36 @@ int main(int argc, char** argv) {
   }
   const char *script_file = NULL;
   if (argc >= 2 && strcmp(argv[0], "--script") == 0) {
-    script_file = argv[1];
+    static char script_abs[1024];
+    script_file = AbsolutizePathArg(argv[1], script_abs, sizeof(script_abs));
     argc -= 2, argv += 2;
   }
   const char *framedump_dir = NULL;
   if (argc >= 2 && strcmp(argv[0], "--framedump") == 0) {
-    framedump_dir = argv[1];
+    static char framedump_abs[1024];
+    framedump_dir = AbsolutizePathArg(argv[1], framedump_abs, sizeof(framedump_abs));
     argc -= 2, argv += 2;
   }
+  if (argc >= 1 && argv[0] && argv[0][0] != '-' && argv[0][0] != '\0') {
+    /* Positional ROM path. */
+    static char rom_abs[1024];
+    argv[0] = (char *)AbsolutizePathArg(argv[0], rom_abs, sizeof(rom_abs));
+  }
+
+  /* The config is config.ini next to the executable — nothing else,
+   * no directory walking. Anchoring cwd to the exe dir also pins
+   * keybinds.ini, rom.cfg and saves/ there, however the process was
+   * launched. (On read-only installs the anchor declines and cwd
+   * stays authoritative; see launcher.h.) */
+  {
+    extern int snesrecomp_anchor_to_exe_dir(void);
+    snesrecomp_anchor_to_exe_dir();
+  }
+  if (!config_file)
+    EnsureConfigIni();
   ParseConfigFile(config_file);
   // Apply local overrides if present (gitignored). Lets a developer
-  // mute audio etc. without touching the checked-in mmx.ini. Last
+  // mute audio etc. without touching the checked-in config.ini. Last
   // parser to set a key wins, so local overrides take precedence.
   {
     FILE *f_local = fopen("config.local.ini", "rb");
@@ -695,8 +715,9 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  /* Load (or generate) keybinds.ini next to the executable. */
-  keybinds_init(program_path);
+  /* Load (or generate) keybinds.ini next to the executable (cwd is
+   * anchored there; on read-only installs it tracks the config). */
+  keybinds_init(NULL);
 
   bool custom_size = g_config.window_width != 0 && g_config.window_height != 0;
   int window_width = custom_size ? g_config.window_width : g_current_window_scale * g_snes_width;
@@ -757,7 +778,7 @@ error_reading:;
     else
       fprintf(stderr, "[oracle] backend ready (rom=%s)\n", rom_path);
   } else {
-    /* Disabled in mmx.ini. Tell the framework dispatcher so every TCP
+    /* Disabled in config.ini. Tell the framework dispatcher so every TCP
      * emu_* command returns a structured warning instead of silently
      * no-op'ing — and explicitly tells callers re-enabling is NOT a
      * fix. The reason string MUST be a string literal (stored by
@@ -770,7 +791,7 @@ error_reading:;
         "loads, so any recomp-vs-oracle WRAM/PC comparison ends up "
         "diffing two unrelated game moments. A prior session burned real "
         "time chasing false 'divergences' that were just content "
-        "mismatch. Disabled in mmx.ini ([General] EnableSnes9xOracle = "
+        "mismatch. Disabled in config.ini ([General] EnableSnes9xOracle = "
         "false) until save-state-aware oracle or input-record/replay "
         "parity exists. Re-enabling without fixing that is NOT a "
         "solution.";
@@ -944,12 +965,12 @@ error_reading:;
     debug_server_wait_if_paused();
 
     /* Drive the SNES controller bits in g_input_state from keybinds.ini.
-     * mmx.ini's [KeyMap] still owns system commands (state save/load,
+     * config.ini's [KeyMap] still owns system commands (state save/load,
      * fullscreen, pause, etc.); the 12 controller buttons per player
      * come from keybinds.ini.
      *
      * Mapping below: keybinds bit layout (see keybinds.h) -> kKeys_Controls
-     * index (mmx.ini [Controls] order: Up Down Left Right Select Start
+     * index (config.ini [Controls] order: Up Down Left Right Select Start
      * A B X Y L R). HandleCommand is idempotent for set/clear, so calling
      * it every frame is safe. */
     {
@@ -1223,7 +1244,7 @@ static int RemapSdlButton(int button) {
  * HandleCommand's kKeys_Controls / kKeys_ControlsP2 logic but writes
  * to g_pad_buttons so the per-frame keyboard polling can't clobber
  * gamepad-set bits. Non-controller commands (system shortcuts bound
- * via mmx.ini [GamepadMap]) fall through to HandleCommand so things
+ * via config.ini [GamepadMap]) fall through to HandleCommand so things
  * like state save/load on a gamepad button still work. */
 static void SetPadButtonOrFallthrough(uint32 j, bool pressed) {
   static const uint8 kKbdRemap[] = { 4, 5, 6, 7, 2, 3, 8, 0, 9, 1, 10, 11 };
@@ -1311,39 +1332,13 @@ static void HandleGamepadAxisInput(GamepadInfo *gi, int axis, Sint16 value) {
   }
 }
 
-// Go some steps up and find mmx.ini
-static void SwitchDirectory(void) {
-  char buf[4096];
-  if (!getcwd(buf, sizeof(buf) - 32))
-    return;
-  size_t pos = strlen(buf);
-
-  for (int step = 0; pos != 0 && step < 3; step++) {
-    memcpy(buf + pos, "/config.ini", 12);
-    FILE *f = fopen(buf, "rb");
-    if (f) {
-      fclose(f);
-      buf[pos] = 0;
-      if (step != 0) {
-        printf("Found config.ini in %s\n", buf);
-        int err = chdir(buf);
-        (void)err;
-      }
-      return;
-    }
-    pos--;
-    while (pos != 0 && buf[pos] != '/' && buf[pos] != '\\')
-      pos--;
-  }
-}
-
-/* Default mmx.ini content written next to the executable when no
- * mmx.ini was discoverable on launch. Mirrors the repo-root mmx.ini
+/* Default config.ini content written next to the executable when no
+ * config.ini exists there on launch. Mirrors the repo-root config.ini
  * but stripped of dev-only comments; keep them in lock-step when
  * adding new tunables that should be user-discoverable. The
  * [GamepadMap] section gives a plugged-in Xbox controller working
  * defaults out of the box. */
-static const char kDefaultSmwIniContent[] =
+static const char kDefaultConfigIniContent[] =
   "[General]\n"
   "# Automatically save state on quit and reload on start\n"
   "Autosave = 0\n"
@@ -1406,48 +1401,32 @@ static const char kDefaultSmwIniContent[] =
   "Controls =   DpadUp, DpadDown, DpadLeft, DpadRight, Back, Start, B, A, Y, X, Lb, Rb\n"
   "ControlsP2 = DpadUp, DpadDown, DpadLeft, DpadRight, Back, Start, B, A, Y, X, Lb, Rb\n";
 
-/* Write the default mmx.ini next to the executable and chdir there.
- * Called by EnsureMmxIniNextToExe when no mmx.ini was found via the
- * SwitchDirectory upward walk. Silent no-op if it can't derive the
- * exe directory from `exe_path`. */
-static void WriteDefaultMmxIni(const char *exe_path) {
-  if (!exe_path || !*exe_path) return;
-  /* Find last path separator in exe_path. */
-  const char *slash = NULL;
-  for (const char *p = exe_path; *p; p++)
-    if (*p == '/' || *p == '\\') slash = p;
-  if (!slash) return;
-  size_t dir_len = (size_t)(slash - exe_path);
-  if (dir_len + 12 >= 1024) return;  /* path too long */
-  char dir[1024];
-  memcpy(dir, exe_path, dir_len);
-  dir[dir_len] = 0;
-  char ini_path[1024];
-  snprintf(ini_path, sizeof(ini_path), "%s/config.ini", dir);
-  FILE *f = fopen(ini_path, "w");
-  if (!f) {
-    fprintf(stderr, "Warning: could not write default config.ini to %s\n", ini_path);
-    return;
-  }
-  fputs(kDefaultSmwIniContent, f);
-  fclose(f);
-  printf("[config.ini] Generated %s\n", ini_path);
-  /* chdir so ParseConfigFile's relative "mmx.ini" lookup finds it. */
-  if (chdir(dir) != 0) {
-    fprintf(stderr, "Warning: could not chdir to %s\n", dir);
-  }
-}
-
-/* Ensure mmx.ini is reachable from cwd. SwitchDirectory walks up to
- * 3 levels looking for one and chdir's if it finds it; if it didn't,
- * cwd has no mmx.ini and ParseConfigFile would warn. Write a default
- * next to the executable so first-launch from a clean release directory
- * always has a working config. */
-static void EnsureMmxIniNextToExe(const char *exe_path) {
+/* Ensure config.ini exists next to the executable (cwd after
+ * snesrecomp_anchor_to_exe_dir). First launch from a clean release
+ * directory writes the default so the config the user can edit is
+ * always sitting right beside the exe. */
+static void EnsureConfigIni(void) {
   FILE *f = fopen("config.ini", "rb");
   if (f) {
     fclose(f);
-    return;
+  } else {
+    f = fopen("config.ini", "w");
+    if (!f) {
+      fprintf(stderr, "Warning: could not write default config.ini\n");
+    } else {
+      fputs(kDefaultConfigIniContent, f);
+      fclose(f);
+      printf("[config.ini] Generated default config next to the executable\n");
+    }
   }
-  WriteDefaultMmxIni(exe_path);
+  /* Release zips through v1.0.6 shipped a decorative mmx.ini that the
+   * exe never read. If one is still sitting next to the exe, say
+   * loudly that editing it does nothing. */
+  f = fopen("mmx.ini", "rb");
+  if (f) {
+    fclose(f);
+    fprintf(stderr,
+            "Note: mmx.ini is not read; settings live in config.ini "
+            "next to the executable.\n");
+  }
 }
