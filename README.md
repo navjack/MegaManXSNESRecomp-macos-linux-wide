@@ -70,7 +70,7 @@ enable a second keyboard player.
 SDL_GameController (XInput on Windows). Plug it in before launching, or
 hot-plug after.
 
-System shortcuts (configured in `mmx.ini`'s `[KeyMap]` section):
+System shortcuts (configured in `config.ini`'s `[KeyMap]` section):
 
 | Action               | Default |
 |----------------------|---------|
@@ -147,7 +147,7 @@ section.
 | `snesrecomp/` | Symlink to a sibling clone of the [snesrecomp framework](https://github.com/mstan/snesrecomp). |
 | `third_party/` | Vendored deps (gl_core, stb_image) with their own licenses. |
 | `mmx.sln` + `src/mmx.vcxproj` | Visual Studio build glue. |
-| `mmx.ini` | Sample config; the runtime auto-copies a fresh one next to the exe on first run. |
+| `config.ini` | The config. Generated next to the exe on first run if missing. |
 
 ## License
 
