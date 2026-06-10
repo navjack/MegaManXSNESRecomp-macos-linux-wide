@@ -815,7 +815,13 @@ error_reading:;
       return 1;
     }
     g_audio_channels = 2;
-    g_frames_per_block = (534 * have.freq) / 32000;
+    /* One native DSP block is 534 samples at the SPC's true output rate
+     * of 32040 Hz (1.024 MHz / 32). The old divisor of 32000 understated
+     * the rate, playing everything a constant -2.2 cents flat (measured
+     * vs the snes9x oracle, issue #4); the truncating division also
+     * undersized the block for non-multiple rates. Round to the nearest
+     * frame: 32040->534 (1:1, no resample), 48000->800, 44100->735. */
+    g_frames_per_block = (534 * have.freq + 32040 / 2) / 32040;
     g_audiobuffer = (uint8 *)calloc(g_frames_per_block * have.channels * sizeof(int16), 1);
   }
 
@@ -1367,7 +1373,7 @@ static const char kDefaultSmwIniContent[] =
   "\n"
   "[Sound]\n"
   "EnableAudio = 1\n"
-  "AudioFreq = 32000\n"
+  "AudioFreq = 32040\n"
   "AudioChannels = 2\n"
   "AudioSamples = 512\n"
   "\n"

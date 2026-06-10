@@ -425,7 +425,10 @@ void ParseConfigFile(const char *filename) {
    * exe leaves audio_freq/audio_channels/audio_samples at 0, which
    * either makes SDL_OpenAudioDevice fail or opens a degenerate
    * device with frames-per-block math that produces silence. */
-  g_config.audio_freq = 32000;
+  /* 32040 = the SPC's true output rate (1.024 MHz / 32): the DSP's
+   * native blocks pass through 1:1 with no resampling and no pitch
+   * error. 32000 played everything -2.2 cents flat (issue #4). */
+  g_config.audio_freq = 32040;
   g_config.audio_channels = 2;
   g_config.audio_samples = 512;
   /* Default to gamepad-enabled so a freshly-extracted release (no
