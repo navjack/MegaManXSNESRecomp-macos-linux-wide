@@ -3,7 +3,19 @@
 # repo evolving on its own cadence). Update via:
 #   git -C ../snesrecomp rev-parse main > /tmp/sha && \
 #     sed -i "s|^sha = .*|sha = $(cat /tmp/sha)|" snesrecomp.pin
-sha = 7144d73287631c5df00943c5a17aeaa9b266a641
+sha = 00f4adbfab0735c8e3870631fefaf16841c86248
+# 2026-06-10 bump: audio accuracy (issue #4). 48e7260 paces APU catch-up
+# from APU-port touches only (kills the fictional SPC-cycle bursts from
+# $2118 decompression spam that overflowed the DSP output ring and ate
+# live audio at scene boundaries) + no-consumer wall-clock baseline;
+# 00f4adb restores hardware-latched KON/KOF polling (removes the
+# immediate-KON deviation that could start voices with a stale BRR
+# decode pointer -> occasional off-pitch note); 67ead27 adds the
+# always-on audio_trace observability rings + debug-server audio
+# commands + snesref oracle WAV capture used to measure all of this.
+# Runner-only changes: no regen required (src/gen untouched). Verified
+# by 300 s deterministic capture (0 audible drop runs, pitch median
+# +0.1 cents vs snes9x oracle) + user ear-check.
 # 2026-06-03 bump: snesrecomp funcs.h emitter now emits the canonical
 # per-frame entry decl `void RunOneFrameOfGame_Internal(void);` (no game
 # prefix). Game side renamed MmxRunOneFrameOfGame -> RunOneFrameOfGame to
