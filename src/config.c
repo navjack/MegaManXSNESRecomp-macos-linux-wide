@@ -373,12 +373,11 @@ static bool HandleIniConfig(int section, const char *key, char *value) {
     } else if (StringEqualsNoCase(key, "DisplayPerfInTitle")) {
       return ParseBool(value, &g_config.display_perf_title);
     } else if (StringEqualsNoCase(key, "DisableFrameDelay")) {
-      /* Removed: frame-delay pacing is always on (audio sync). Accept the key
-       * from older config.ini files without erroring; the value is ignored. */
-      (void)value;
-      return true;
+      return ParseBool(value, &g_config.disable_frame_delay);
     } else if (StringEqualsNoCase(key, "EnableSnes9xOracle")) {
       return ParseBool(value, &g_config.enable_snes9x_oracle);
+    } else if (StringEqualsNoCase(key, "SkipLauncher")) {
+      return ParseBool(value, &g_config.skip_launcher);
     }
   } else if (section == 4) {
   }
@@ -441,6 +440,7 @@ void ParseConfigFile(const char *filename) {
   g_config.enable_gamepad[0] = true;
   g_config.enable_gamepad[1] = true;
   g_config.gamepad_deadzone = 10000;
+  g_config.skip_launcher = false;
   /* Default ON to preserve current behaviour across other ports that
    * share this framework code; per-game .ini sets it false where the
    * oracle is incompatible with the repro workflow. See config.h doc. */
@@ -521,6 +521,8 @@ void WriteConfigFile(const char *filename) {
     { "Sound",    "AudioFreq" },
     { "GamepadMap", "EnableGamepad1" },
     { "GamepadMap", "EnableGamepad2" },
+    { "General",    "SkipLauncher" },
+    { "GamepadMap", "GamepadDeadzone" },
   };
   const int N = (int)countof(kvs);
   snprintf(kvs[0].val, sizeof(kvs[0].val), "%d", g_config.window_scale ? g_config.window_scale : 3);
@@ -529,6 +531,8 @@ void WriteConfigFile(const char *filename) {
   snprintf(kvs[3].val, sizeof(kvs[3].val), "%d", g_config.audio_freq);
   snprintf(kvs[4].val, sizeof(kvs[4].val), "%s", g_config.enable_gamepad[0] ? "true" : "false");
   snprintf(kvs[5].val, sizeof(kvs[5].val), "%s", g_config.enable_gamepad[1] ? "true" : "false");
+  snprintf(kvs[6].val, sizeof(kvs[6].val), "%d", g_config.skip_launcher ? 1 : 0);
+  snprintf(kvs[7].val, sizeof(kvs[7].val), "%d", g_config.gamepad_deadzone);
 
   char *data = NULL;
   long sz = 0;

@@ -52,6 +52,16 @@ typedef struct Config {
   bool no_sprite_limits;
   bool display_perf_title;
 
+  // Skip the per-frame SDL_Delay pacing. Off by default (pacing on) so audio
+  // stays in sync; cfg-only escape hatch (DisableFrameDelay = 1) for users on
+  // an exactly-60 Hz / vsync-correct display who want the perf.
+  bool disable_frame_delay;
+
+  // Boot straight to the game, skipping the GUI launcher, on subsequent runs.
+  // Set from the launcher's dashboard checkbox. Force the launcher back with the
+  // --launcher argument or by setting SkipLauncher = 0 in config.ini.
+  bool skip_launcher;
+
   /* Oracle-build only. When false, main.c skips snes_oracle_init_default
    * and calls snes_oracle_set_disabled_by_game so the dispatcher refuses
    * every emu_* command with a structured warning naming the reason. For
