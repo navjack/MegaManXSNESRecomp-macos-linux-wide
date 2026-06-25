@@ -662,10 +662,6 @@ int main(int argc, char** argv) {
     snesrecomp_anchor_to_exe_dir();
   }
 
-  /* Carry a legacy saves/smw.srm forward to the generic saves/save.srm BEFORE the
-   * launcher runs, so its SAVES panel shows the migrated save on the first launch
-   * after upgrading. Idempotent; RtlReadSram also calls it on boot as a fallback. */
-  RtlMigrateLegacySram("smw");
   if (!config_file)
     EnsureConfigIni();
   /* Pin config.ini to the exe directory for all reads/writes, regardless of the
@@ -776,7 +772,10 @@ int main(int argc, char** argv) {
         memset(&gi, 0, sizeof(gi));
         gi.name = "Mega Man X";
         gi.region = "(USA)";
-        gi.sram_path = "saves/save.srm";  /* generic SRAM path (RtlReadSram migrates legacy) */
+        gi.sram_path = NULL;           /* hide SAVES panel — MMX has no battery SRAM
+                                          (it's a password game). Synthesized SRAM via
+                                          password persistence is a future enhancement;
+                                          see ENHANCEMENTS.md. */
         gi.expected_crc = 0xDED53C64u;
         gi.has_expected_crc = 1;
         gi.known_sha256 = &kMmxUsaSha256;   /* single accepted digest */
