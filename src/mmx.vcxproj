@@ -248,6 +248,7 @@
     <ClCompile Include="..\snesrecomp\runner\src\keybinds.c" />
     <ClCompile Include="..\snesrecomp\runner\src\cpu_state.c" />
     <ClCompile Include="..\snesrecomp\runner\src\audio_trace.c" />
+    <ClCompile Include="..\snesrecomp\runner\src\ppu_dma_trace.c" />
     <ClCompile Include="..\snesrecomp\runner\src\cpu_trace.c">
       <ExcludedFromBuild Condition="'$(Configuration)'=='Production'">true</ExcludedFromBuild>
     </ClCompile>
