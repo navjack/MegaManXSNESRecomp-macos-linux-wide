@@ -6,6 +6,7 @@
 #include "funcs.h"
 #include "debug_server.h"
 #include "cpu_trace.h"
+#include "snes/interp_bridge.h"   /* faithful LLE of the $8099 task scheduler */
 #include <setjmp.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -587,7 +588,23 @@ void RunOneFrameOfGame(void) {
    * replacement for the entire $8099 main loop. */
   cpu_trace_arm_px_tripwire();
   waiting_for_vblank = 0xFF;
-  MmxSchedulerTick();
+  /* Swappable scheduler tier. Default = the hand-written C-host HLE
+   * (MmxSchedulerTick). SNESRECOMP_MMX_SCHED_LLE=1 = faithful LLE: run the real
+   * $00:8099 cooperative task scheduler under interp816, yielding after one slot
+   * walk when it reaches the $8080A1 vblank-spin with $0B9D cleared. The
+   * interpreter handles the infinite loop, coroutine stack switching, and
+   * JMP ($0032,X) dispatch by construction; dispatched tasks bounce to compiled
+   * bodies via the paired ABI. I_NMI already set $0B9D=$FF so the spin falls
+   * through on entry. See docs / co-sim: fixes NMI/IRQ-timing guest-state drift
+   * the HLE approximates (scheduler slot $0031, DMA bookkeeping $02EE/$02FA). */
+  { static int s_lle = -1;
+    if (s_lle < 0) { const char *e = getenv("SNESRECOMP_MMX_SCHED_LLE");
+                     s_lle = (e && e[0] && e[0] != '0') ? 1 : 0; }
+    if (s_lle)
+      interp_bridge_run_scheduler(&g_cpu, 0x808099, 0x8080A1, 0x0B9D);
+    else
+      MmxSchedulerTick();
+  }
   cpu_trace_px_breadcrumb(&g_cpu, 0x2003, "after_Internal");
   g_first_frame_done = true;
 }
