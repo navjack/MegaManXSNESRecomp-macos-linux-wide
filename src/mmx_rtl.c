@@ -31,6 +31,29 @@ jmp_buf g_mmx_task_jmp;             /* legacy — kept for build compat */
 uint8_t g_mmx_task_slot_x;
 uint8_t g_mmx_task_yield_countdown;
 
+#ifndef MMX_VARIANT_JP
+#define MMX_VARIANT_JP 0
+#endif
+
+static int mmx_rtl_diag_enabled(void);
+
+/* Dispatch a cooperative task by its 16-bit entry PC (from RAM $0032+slot).
+ *
+ * USA: a hardcoded PC->recompiled-body table (the validated ship default;
+ *      the C-host HLE fiber scheduler is USA's default scheduler tier).
+ *
+ * JP:  NO hardcoded table. JP's default scheduler tier is the faithful LLE
+ *      (interp_bridge_run_scheduler), which never calls this. This body only
+ *      exists so a forced SNESRECOMP_MMX_SCHED_LLE=0 on JP still links and
+ *      dispatches — it routes the live task PC through the engine's general
+ *      runtime dispatch (g_dispatch_table lookup + LoROM mirror; a miss falls
+ *      to the interpreter tier rather than the old silent no-op). No
+ *      per-variant Task_* symbols, so it links against any JP gen. */
+#if MMX_VARIANT_JP
+static RecompReturn mmx_dispatch_task_pc(CpuState *cpu, uint16_t pc) {
+  return cpu_dispatch_call_pc(cpu, 0x000000u | (uint32_t)pc, 0xFFFFFFu);
+}
+#else
 /* Task-entry handler table. Map handler PC (16-bit) -> C function ptr
  * for the recomp'd task body. */
 extern RecompReturn Task0_M1X1(CpuState *cpu);
@@ -41,8 +64,6 @@ extern RecompReturn Task_B25B_M1X1(CpuState *cpu);
 extern RecompReturn Task_B38D_M1X1(CpuState *cpu);
 extern RecompReturn Task_B436_M1X1(CpuState *cpu);
 extern RecompReturn Task_E6B1_M1X1(CpuState *cpu);
-
-static int mmx_rtl_diag_enabled(void);
 
 static RecompReturn mmx_dispatch_task_pc(CpuState *cpu, uint16_t pc) {
   switch (pc) {
@@ -62,6 +83,7 @@ static RecompReturn mmx_dispatch_task_pc(CpuState *cpu, uint16_t pc) {
       return RECOMP_RETURN_NORMAL;
   }
 }
+#endif
 
 /* ── Host-fiber-based cooperative scheduler ──────────────────────────
  *
@@ -796,18 +818,30 @@ void RunOneFrameOfGame(void) {
    * replacement for the entire $8099 main loop. */
   cpu_trace_arm_px_tripwire();
   waiting_for_vblank = 0xFF;
-  /* Swappable scheduler tier. Default = the hand-written C-host HLE
-   * (MmxSchedulerTick). SNESRECOMP_MMX_SCHED_LLE=1 = faithful LLE: run the real
-   * $00:8099 cooperative task scheduler under interp816, yielding after one slot
+  /* Swappable scheduler tier. Faithful LLE: run the real $00:8099
+   * cooperative task scheduler under interp816, yielding after one slot
    * walk when it reaches the $8080A1 vblank-spin with $0B9D cleared. The
    * interpreter handles the infinite loop, coroutine stack switching, and
    * JMP ($0032,X) dispatch by construction; dispatched tasks bounce to compiled
-   * bodies via the paired ABI. I_NMI already set $0B9D=$FF so the spin falls
-   * through on entry. See docs / co-sim: fixes NMI/IRQ-timing guest-state drift
-   * the HLE approximates (scheduler slot $0031, DMA bookkeeping $02EE/$02FA). */
+   * bodies via the paired ABI (and not-yet-compiled task bodies run interpreted
+   * via the tier-2 gap manifest) — so it needs NO per-variant task-PC table.
+   * I_NMI already set $0B9D=$FF so the spin falls through on entry. See docs /
+   * co-sim: fixes NMI/IRQ-timing guest-state drift the HLE approximates
+   * (scheduler slot $0031, DMA bookkeeping $02EE/$02FA).
+   *
+   * Per-variant default via MMX_SCHED_LLE_DEFAULT (set by the build):
+   *   USA build  -> 0 (hand-written C-host HLE MmxSchedulerTick; validated ship default)
+   *   JP build   -> 1 (LLE; JP has no hardcoded task table, LLE is the only path)
+   * Runtime env SNESRECOMP_MMX_SCHED_LLE overrides either direction
+   * (set to 0 to force HLE, non-0 to force LLE) — used to prep the USA-on-LLE
+   * playtest build without a separate binary. */
+#ifndef MMX_SCHED_LLE_DEFAULT
+#define MMX_SCHED_LLE_DEFAULT 0
+#endif
   { static int s_lle = -1;
-    if (s_lle < 0) { const char *e = getenv("SNESRECOMP_MMX_SCHED_LLE");
-                     s_lle = (e && e[0] && e[0] != '0') ? 1 : 0; }
+    if (s_lle < 0) { s_lle = MMX_SCHED_LLE_DEFAULT;
+                     const char *e = getenv("SNESRECOMP_MMX_SCHED_LLE");
+                     if (e && e[0]) s_lle = (e[0] != '0') ? 1 : 0; }
     if (s_lle)
       interp_bridge_run_scheduler(&g_cpu, 0x808099, 0x8080A1, 0x0B9D);
     else

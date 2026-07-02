@@ -84,3 +84,8 @@ MegaManXSNESRecomp-windows-*.zip
 MegamanXRecomp-windows-*.zip
 mmx-v*.zip
 release-stage/
+*.fig
+# per-variant generated C (copyrighted, regenerated at build time)
+variants/*/gen/
+build-jp/
+build-jp-dbg/

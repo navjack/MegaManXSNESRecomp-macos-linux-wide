@@ -74,7 +74,29 @@ enum {
   kDefaultSamples = 2048,
 };
 
-static const char kWindowTitle[] = "Megaman X (Recompiled)";
+/* ── Per-variant game identity ───────────────────────────────────────────
+ * One source, two games (USA "Mega Man X" / JP "Rockman X"), selected by the
+ * build via MMX_VARIANT_JP (set by the RockmanX CMake target). Mirrors the
+ * RubySapphireRecomp add_gba_variant compile-def pattern. USA is the default,
+ * so the shipping build is byte-identical to before this change. */
+#ifndef MMX_VARIANT_JP
+#define MMX_VARIANT_JP 0
+#endif
+#if MMX_VARIANT_JP
+#  define MMX_WINDOW_TITLE    "Rockman X (Recompiled)"
+#  define MMX_GAME_NAME       "Rockman X"
+#  define MMX_GAME_REGION     "(Japan)"
+#  define MMX_LAUNCHER_TITLE  "Rockman X \xE2\x80\x94 Launcher"
+#  define MMX_ROM_CRC32       0x5584641Eu
+#else
+#  define MMX_WINDOW_TITLE    "Megaman X (Recompiled)"
+#  define MMX_GAME_NAME       "Mega Man X"
+#  define MMX_GAME_REGION     "(USA)"
+#  define MMX_LAUNCHER_TITLE  "Mega Man X \xE2\x80\x94 Launcher"
+#  define MMX_ROM_CRC32       0xDED53C64u
+#endif
+
+static const char kWindowTitle[] = MMX_WINDOW_TITLE;
 static uint32 g_win_flags = SDL_WINDOW_RESIZABLE;
 static SDL_Window *g_window;
 
@@ -692,15 +714,26 @@ int main(int argc, char** argv) {
    * so headered and unheadered dumps both verify against the same hash. */
   static char rom_path_buf[512];
   {
-    /* "Mega Man X (USA) (Rev 1)" — 1.5 MiB LoROM.
-     * SHA-256 computed locally from a verified dump; cross-check against
-     * another canonical source before relying on this for public release. */
-    static const uint8_t kMmxUsaSha256[32] = {
+    /* 1.5 MiB LoROM, Rev 1 (v1.1). SHA-256 over the unheadered payload (the
+     * launcher strips a 512-byte SMC copier header before hashing).
+     *   USA "Mega Man X (USA) (Rev 1)"   crc32 DED53C64
+     *   JP  "Rockman X (Japan) (Rev 1)"  crc32 5584641E
+     * SHA-256 computed locally from verified dumps. */
+#if MMX_VARIANT_JP
+    static const uint8_t kMmxRomSha256[32] = {
+      0x76,0xf8,0x0c,0xdf,0x70,0x4a,0x0e,0x1d,
+      0xaf,0x1a,0xf5,0xbb,0xf5,0x64,0xe4,0x27,
+      0xb4,0x25,0xa5,0xee,0x42,0x32,0x94,0x17,
+      0xde,0x6f,0x29,0x21,0x9f,0xe6,0x3e,0x5f,
+    };
+#else
+    static const uint8_t kMmxRomSha256[32] = {
       0xb8,0xf7,0x0a,0x6e,0x7f,0xb9,0x38,0x19,
       0xf7,0x96,0x93,0x57,0x88,0x87,0xe2,0xc1,
       0x1e,0x19,0x6b,0xdf,0x1a,0xc6,0xdd,0xc7,
       0xcb,0x92,0x4b,0x1a,0xd0,0xbe,0x2d,0x32,
     };
+#endif
     int rom_resolved_by_launcher = 0;
 
 #if defined(SNES_LAUNCHER)
@@ -770,21 +803,21 @@ int main(int argc, char** argv) {
 
         SnesLauncherCGameInfo gi;
         memset(&gi, 0, sizeof(gi));
-        gi.name = "Mega Man X";
-        gi.region = "(USA)";
+        gi.name = MMX_GAME_NAME;
+        gi.region = MMX_GAME_REGION;
         gi.sram_path = NULL;           /* hide SAVES panel — MMX has no battery SRAM
                                           (it's a password game). Synthesized SRAM via
                                           password persistence is a future enhancement;
                                           see ENHANCEMENTS.md. */
-        gi.expected_crc = 0xDED53C64u;
+        gi.expected_crc = MMX_ROM_CRC32;
         gi.has_expected_crc = 1;
-        gi.known_sha256 = &kMmxUsaSha256;   /* single accepted digest */
+        gi.known_sha256 = &kMmxRomSha256;   /* single accepted digest */
         gi.num_known_sha256 = 1;
         gi.widescreen_supported = 0;   /* hide Widescreen panel */
         gi.msu1_supported = 0;         /* hide MSU-1 panel */
 
         int act = snes_launcher_run_window(
-            "Mega Man X \xE2\x80\x94 Launcher",
+            MMX_LAUNCHER_TITLE,
             &ls, &gi, "launcher", init_rom, rom_path_buf, sizeof(rom_path_buf));
         if (act == 1) return 0;   /* user closed the launcher */
         if (act == 0) {
@@ -820,7 +853,7 @@ int main(int argc, char** argv) {
     extern int snesrecomp_launcher_resolve_rom_sha256(
         int, char **, char *, size_t, const uint8_t *);
     if (!snesrecomp_launcher_resolve_rom_sha256(la_argc, la_argv, rom_path_buf,
-                                                sizeof(rom_path_buf), kMmxUsaSha256)) {
+                                                sizeof(rom_path_buf), kMmxRomSha256)) {
       /* User cancelled the picker or repeatedly chose a non-matching ROM. */
       return 1;
     }
