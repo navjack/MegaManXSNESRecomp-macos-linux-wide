@@ -112,8 +112,12 @@ RecompReturn HleMmxSchedulerDispatch(CpuState *cpu) {
    * caller-body that BRAs through the slot loop. Each inlined copy
    * tail-calls into here; treat as "task wants to be re-scheduled"
    * — yield with countdown=1 so the C-host scheduler picks up
-   * the next iteration. */
+   * the next iteration. No JSR-frame contract at this yield, so the
+   * serializable resume capture is skipped (a state saved in this
+   * suspension restarts the task at entry on load). */
   (void)cpu;
+  extern uint8_t g_yield_captures_resume;
+  g_yield_captures_resume = 0;
   mmx_host_yield(1);
   return RECOMP_RETURN_NORMAL;
 }

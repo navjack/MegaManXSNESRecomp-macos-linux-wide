@@ -8,4 +8,10 @@ void MmxDrawPpuFrame(void);
 void RunOneFrameOfGame(void);
 void MmxSchedulerTick(void);
 
+/* .sav v5 game chunk + post-load fiber rebuild (RtlGameInfo hooks). */
+struct SaveLoadInfo;
+void MmxStateSaveExtra(struct SaveLoadInfo *sli);
+void MmxStateLoadExtra(struct SaveLoadInfo *sli, uint32_t version);
+void MmxOnStateLoaded(uint32_t version);
+
 #endif  // SMW_SMW_RTL_H_

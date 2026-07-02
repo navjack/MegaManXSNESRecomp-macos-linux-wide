@@ -119,6 +119,35 @@ static MmxSlotCpuSave g_slot_saved_state[MMX_NSLOTS] = {0};
 static MmxSlotCpuSave g_saved_scheduler_state = {0};
 static uint8_t g_current_slot_idx = 0xFF;
 
+/* ── Serializable task resume contexts (save states that survive loading
+ * from any game mode / a fresh process) ─────────────────────────────────
+ *
+ * A yielded task's live resume point is its fiber's host C stack — not
+ * serializable. But the guest-visible equivalent IS: the yield's popped
+ * JSR return frame names the exact guest continuation PC, and the task's
+ * registers at resume are the yield-time CpuState with that frame
+ * consumed. mmx_host_yield records both on every standard yield (cheap);
+ * the .sav v5 game chunk persists them; on load the fibers are torn down
+ * and each occupied slot gets a fresh fiber that resumes its task at the
+ * recorded guest PC under the interp bridge (calls — including the yield
+ * HLEs — bounce to compiled bodies via the paired ABI, so the task runs
+ * mostly compiled again after one interpreted function tail). */
+typedef struct MmxSlotResume {
+  uint8_t  valid;      /* pc/cpu describe a resumable standard-yield suspension */
+  uint8_t  pb;         /* resume bank */
+  uint16_t pc;         /* resume guest PC (the popped frame's continuation) */
+  uint16_t base_s;     /* task base stack (entry-S) — the top-level-RTS watermark */
+  MmxSlotCpuSave cpu;  /* registers at resume; S already past the popped frame */
+} MmxSlotResume;
+static MmxSlotResume g_slot_resume[MMX_NSLOTS];
+static uint16_t g_slot_base_s[MMX_NSLOTS];          /* entry-S, latched at seed */
+static uint8_t  g_slot_resume_pending[MMX_NSLOTS];  /* set by state load */
+/* Yields reached through the non-standard HLE paths (scheduler-dispatch
+ * $80E6) have no popped-frame contract; they clear the slot's resume info
+ * instead of capturing a bogus one. Non-static: gen_stubs.c's HLE bodies
+ * clear it before calling mmx_host_yield. */
+uint8_t g_yield_captures_resume = 1;
+
 static int mmx_rtl_diag_enabled(void) {
   static int s_init = 0;
   static int s_enabled = 0;
@@ -202,6 +231,42 @@ static void CALLBACK mmx_fiber_entry(void *param) {
   }
 }
 
+/* Resume-after-load fiber entry: the slot's task was suspended at a standard
+ * yield when the state was saved. Its registers (with the yield frame already
+ * consumed) were restored into g_slot_saved_state by the load hook, so the
+ * scheduler's dispatch path has already installed them into g_cpu. Run the
+ * task tail from the recorded guest PC under the interp bridge: calls bounce
+ * to compiled bodies (the yield HLEs among them — those suspend this fiber
+ * exactly like the compiled path), the task-die/scheduler-dispatch JMP
+ * targets are stop-intercepted, and a top-level RTS past base_s ends the
+ * task. From the scheduler's point of view this fiber is indistinguishable
+ * from one that ran compiled all along. */
+static void CALLBACK mmx_fiber_resume_entry(void *param) {
+  uint8_t slot_idx = (uint8_t)(uintptr_t)param;
+  MmxSlotResume r = g_slot_resume[slot_idx];   /* copy: live struct keeps updating */
+  g_slot_resume_pending[slot_idx] = 0;
+  g_mmx_task_slot_x = (uint8_t)(slot_idx << 4);
+  if (mmx_rtl_diag_enabled()) {
+    fprintf(stderr, "[fiber_resume] frame=%d slot=%u pc=$%02X:%04X base_s=$%04X S=$%04X\n",
+            snes_frame_counter, slot_idx, r.pb, r.pc, r.base_s, g_cpu.S);
+    fflush(stderr);
+  }
+  static const uint32_t k_stop_pcs[] = { 0x0080F8u, 0x0080E6u, 0x008099u };
+  int ok = interp_bridge_resume_task(&g_cpu,
+                                     ((uint32_t)r.pb << 16) | r.pc,
+                                     r.base_s, k_stop_pcs, 3);
+  if (!ok && mmx_rtl_diag_enabled()) {
+    fprintf(stderr, "[fiber_resume] slot=%u interp BAIL (step cap)\n", slot_idx);
+    fflush(stderr);
+  }
+  /* Task frame ended (top-level RTS, stop-PC HLE, or contained bail):
+   * same epilogue as mmx_fiber_entry. */
+  g_slot_done[slot_idx] = 1;
+  for (;;) {
+    SwitchToFiber(g_scheduler_fiber);
+  }
+}
+
 void mmx_host_yield(uint8_t countdown) {
   /* Called from HleMmxYield* (via gen_stubs.c). We're inside a slot
    * fiber. Save the full CpuState before SwitchToFiber so the scheduler
@@ -213,6 +278,25 @@ void mmx_host_yield(uint8_t countdown) {
   g_ram[(0x31 + x) & 0xFFFF] = countdown;
   g_slot_yield_cd[slot_idx] = countdown;
   mmx_save_cpu(&g_slot_saved_state[slot_idx], &g_cpu);
+  /* Record the serializable resume context (see MmxSlotResume). The JSR (or
+   * tail-inherited) return frame sits on the guest stack at S+1/S+2; the
+   * resume continuation is frame+1, with the frame consumed (the HLE pops
+   * S+2 after SwitchToFiber returns, modeling the hardware resume RTS). */
+  if (g_yield_captures_resume) {
+    MmxSlotResume *r = &g_slot_resume[slot_idx];
+    uint16_t s = g_cpu.S;
+    uint8_t lo = g_ram[(uint16_t)(s + 1) & 0x1FFF];
+    uint8_t hi = g_ram[(uint16_t)(s + 2) & 0x1FFF];
+    r->pc = (uint16_t)(((((uint16_t)hi << 8) | lo) + 1) & 0xFFFF);
+    r->pb = g_cpu.PB;
+    r->base_s = g_slot_base_s[slot_idx];
+    r->cpu = g_slot_saved_state[slot_idx];
+    r->cpu.S = (uint16_t)(s + 2);
+    r->valid = 1;
+  } else {
+    g_slot_resume[slot_idx].valid = 0;
+  }
+  g_yield_captures_resume = 1;
 #if SNESRECOMP_TRACE
   /* DIAG: track slot-0 yield-time cpu->S across frames. A persistent
    * downward drift = a per-frame stack leak in slot-0's foreground run
@@ -239,6 +323,108 @@ void mmx_host_yield(uint8_t countdown) {
   SwitchToFiber(g_scheduler_fiber);
   /* Resume: restore the full CpuState for this slot. */
   mmx_restore_cpu(&g_cpu, &g_slot_saved_state[slot_idx]);
+}
+
+/* ── .sav v5 game chunk: persist the scheduler's host-side task state ──────
+ * Streamed through the engine's SaveLoadInfo right after the guest blob
+ * (RtlGameInfo.state_save_extra / state_load_extra). On load, the fibers are
+ * torn down and each occupied slot is flagged resume-pending; the next
+ * MmxSchedulerTick rebuilds it with mmx_fiber_resume_entry. */
+#include "snes/saveload.h"
+
+#define MMX_SAV_CHUNK_MAGIC   0x4D4D5854u  /* "MMXT" */
+#define MMX_SAV_CHUNK_VERSION 1u
+
+typedef struct MmxSavChunk {
+  uint32_t magic, version;
+  MmxSlotCpuSave main_cpu;              /* g_cpu arch regs at save (main ctx) */
+  uint8_t  occupied[MMX_NSLOTS];        /* fiber existed at save */
+  uint16_t fiber_pc[MMX_NSLOTS];
+  uint8_t  prev_state[MMX_NSLOTS];
+  uint8_t  yield_cd[MMX_NSLOTS];
+  uint16_t base_s[MMX_NSLOTS];
+  MmxSlotCpuSave saved_state[MMX_NSLOTS];
+  MmxSlotResume  resume[MMX_NSLOTS];
+  uint8_t  task_slot_x;
+} MmxSavChunk;
+
+static MmxSavChunk g_load_chunk;
+static uint8_t g_load_chunk_ok = 0;
+
+void MmxStateSaveExtra(struct SaveLoadInfo *sli) {
+  MmxSavChunk c;
+  memset(&c, 0, sizeof(c));
+  c.magic = MMX_SAV_CHUNK_MAGIC;
+  c.version = MMX_SAV_CHUNK_VERSION;
+  mmx_save_cpu(&c.main_cpu, &g_cpu);
+  for (int i = 0; i < MMX_NSLOTS; i++) {
+    c.occupied[i]    = (g_slot_fiber[i] != NULL);
+    c.fiber_pc[i]    = g_slot_fiber_pc[i];
+    c.prev_state[i]  = g_slot_prev_state[i];
+    c.yield_cd[i]    = g_slot_yield_cd[i];
+    c.base_s[i]      = g_slot_base_s[i];
+    c.saved_state[i] = g_slot_saved_state[i];
+    c.resume[i]      = g_slot_resume[i];
+  }
+  c.task_slot_x = g_mmx_task_slot_x;
+  sli->func(sli, &c, sizeof(c));
+}
+
+void MmxStateLoadExtra(struct SaveLoadInfo *sli, uint32_t version) {
+  (void)version;
+  g_load_chunk_ok = 0;
+  memset(&g_load_chunk, 0, sizeof(g_load_chunk));
+  sli->func(sli, &g_load_chunk, sizeof(g_load_chunk));
+  if (g_load_chunk.magic == MMX_SAV_CHUNK_MAGIC &&
+      g_load_chunk.version == MMX_SAV_CHUNK_VERSION)
+    g_load_chunk_ok = 1;
+  else
+    fprintf(stderr, "[mmx_state] load: bad game chunk (magic=%08x ver=%u)\n",
+            g_load_chunk.magic, g_load_chunk.version);
+}
+
+void MmxOnStateLoaded(uint32_t version) {
+  if (version < 5 || !g_load_chunk_ok) {
+    /* Legacy v4 save: no chunk, no rebuild — preserve the historical
+     * behavior exactly (live fibers limp along; loads are only reliable
+     * from a matching game mode). */
+    fprintf(stderr, "[mmx_state] loaded legacy v%u state: fibers NOT rebuilt "
+            "(reliable only from a matching game mode)\n", version);
+    return;
+  }
+  const MmxSavChunk *c = &g_load_chunk;
+  for (int i = 0; i < MMX_NSLOTS; i++) {
+    if (g_slot_fiber[i] != NULL) {
+      DeleteFiber(g_slot_fiber[i]);
+      g_slot_fiber[i] = NULL;
+    }
+    g_slot_done[i]        = 0;
+    g_slot_fiber_pc[i]    = c->fiber_pc[i];
+    g_slot_prev_state[i]  = c->prev_state[i];
+    g_slot_yield_cd[i]    = c->yield_cd[i];
+    g_slot_base_s[i]      = c->base_s[i];
+    g_slot_saved_state[i] = c->saved_state[i];
+    g_slot_resume[i]      = c->resume[i];
+    g_slot_resume_pending[i] = (uint8_t)(c->occupied[i] && c->resume[i].valid);
+    if (c->occupied[i] && !c->resume[i].valid)
+      fprintf(stderr, "[mmx_state] slot %d occupied but no resume ctx — task "
+              "will RESTART at entry $%04X\n", i, c->fiber_pc[i]);
+    /* Resume path: the dispatch installs g_slot_saved_state into g_cpu, so
+     * point it at the resume registers (frame already consumed). */
+    if (g_slot_resume_pending[i]) {
+      g_slot_saved_state[i] = c->resume[i].cpu;
+      g_slot_saved_state[i].saved = 1;
+    }
+  }
+  g_mmx_task_slot_x = c->task_slot_x;
+  mmx_restore_cpu(&g_cpu, &c->main_cpu);
+  g_current_slot_idx = 0xFF;
+  fprintf(stderr, "[mmx_state] v%u state loaded: fibers rebuilt (%d resume-pending)\n",
+          version,
+          (int)(g_slot_resume_pending[0] + g_slot_resume_pending[1] +
+                g_slot_resume_pending[2] + g_slot_resume_pending[3] +
+                g_slot_resume_pending[4] + g_slot_resume_pending[5] +
+                g_slot_resume_pending[6]));
 }
 
 void MmxSchedulerTick(void) {
@@ -338,6 +524,8 @@ void MmxSchedulerTick(void) {
       g_slot_fiber_pc[slot_idx] = handler;
       g_slot_done[slot_idx] = 0;
       g_slot_saved_state[slot_idx].saved = 0;
+      g_slot_resume[slot_idx].valid = 0;
+      g_slot_resume_pending[slot_idx] = 0;
     }
     if (g_slot_fiber[slot_idx] == NULL) {
       if (handler == 0) {
@@ -349,17 +537,23 @@ void MmxSchedulerTick(void) {
           fflush(stderr);
         }
       }
-      /* 1 MiB stack per fiber — recomp'd bodies can recurse deeply. */
+      /* 1 MiB stack per fiber — recomp'd bodies can recurse deeply. A slot
+       * flagged resume-pending (by the state-load hook) gets the interp
+       * resume entry instead of a fresh task start. */
+      int resuming = g_slot_resume_pending[slot_idx] && g_slot_resume[slot_idx].valid;
       g_slot_fiber[slot_idx] = CreateFiber(
-          1024 * 1024, mmx_fiber_entry, (void*)(uintptr_t)slot_idx);
+          1024 * 1024,
+          resuming ? mmx_fiber_resume_entry : mmx_fiber_entry,
+          (void*)(uintptr_t)slot_idx);
       if (g_slot_fiber[slot_idx] == NULL) {
         fprintf(stderr, "[mmx_sched] CreateFiber slot=%u failed gle=%lu\n",
                 slot_idx, GetLastError());
         abort();
       }
       if (mmx_rtl_diag_enabled()) {
-        fprintf(stderr, "[fiber_new] frame=%d slot=%u pc=$%04X\n",
-                snes_frame_counter, slot_idx, handler);
+        fprintf(stderr, "[fiber_new] frame=%d slot=%u pc=$%04X%s\n",
+                snes_frame_counter, slot_idx, handler,
+                resuming ? " (RESUME)" : "");
         fflush(stderr);
       }
     } else {
@@ -379,6 +573,11 @@ void MmxSchedulerTick(void) {
       mmx_save_cpu(&g_slot_saved_state[slot_idx], &g_cpu);
       g_slot_saved_state[slot_idx].S = (uint16_t)g_ram[(0x36 + x) & 0xFFFF]
                                      | ((uint16_t)g_ram[(0x37 + x) & 0xFFFF] << 8);
+      /* Latch the task's base stack now: $36/$37 is scheduler scratch between
+       * dispatches, so this is the only authoritative read (mirrors the
+       * handler-PC latch above). The resume machinery uses it as the
+       * top-level-RTS watermark. */
+      g_slot_base_s[slot_idx] = g_slot_saved_state[slot_idx].S;
     }
     mmx_restore_cpu(&g_cpu, &g_slot_saved_state[slot_idx]);
     SwitchToFiber(g_slot_fiber[slot_idx]);
@@ -392,6 +591,8 @@ void MmxSchedulerTick(void) {
       g_slot_fiber_pc[slot_idx] = 0;
       g_slot_done[slot_idx] = 0;
       g_slot_saved_state[slot_idx].saved = 0;
+      g_slot_resume[slot_idx].valid = 0;
+      g_slot_resume_pending[slot_idx] = 0;
       g_ram[(0x30 + x) & 0xFFFF] = 0x00;
       if (dbg) fprintf(stderr, "  <- slot=%u DONE\n", slot_idx);
     } else {

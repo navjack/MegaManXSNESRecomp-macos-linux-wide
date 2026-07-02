@@ -81,6 +81,7 @@ endif()
 target_link_libraries(MegaManXSNESRecomp PRIVATE
     OpenGL::GL
     m                                 # libm: glsl_shader.c uses pow() (implicit on macOS)
+    ${SNESRECOMP_RUNNER_LIBRARIES}    # ws2_32 when trace/cosim builds add the TCP servers
 )
 if(WIN32 AND NOT MSVC)
     # mingw/msys2: this SDL2 does not auto-rename main()->SDL_main, so main.c's
