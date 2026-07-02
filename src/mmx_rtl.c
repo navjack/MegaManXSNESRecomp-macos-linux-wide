@@ -308,9 +308,16 @@ void MmxSchedulerTick(void) {
       continue;
     }
     if (state == 0x02) {
-      uint8_t cd = g_ram[(0x31 + x) & 0xFFFF];
-      if (cd > 1) {
-        g_ram[(0x31 + x) & 0xFFFF] = cd - 1;
+      /* Byte-exact match to the asm scheduler's state-2 handler at $8080B1:
+       *   CMP #$02 ; DEC $31,X ; BEQ resume
+       * i.e. decrement $31 EVERY frame and resume when it reaches 0. The prior
+       * `if (cd > 1) { cd-- }` form resumed on the same frame but left $31 at 1
+       * instead of 0 (never taking the final decrement), so the delay-countdown
+       * byte diverged from the faithful interp-LLE by 1 after every timed yield
+       * (co-sim: the $0031 fork from frame 157). Decrement-then-test matches. */
+      uint8_t cd = (uint8_t)(g_ram[(0x31 + x) & 0xFFFF] - 1);
+      g_ram[(0x31 + x) & 0xFFFF] = cd;
+      if (cd != 0) {
         g_slot_prev_state[slot_idx] = state;
         continue;
       }
