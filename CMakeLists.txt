@@ -79,7 +79,19 @@ if(NOT MSVC)
 endif()
 
 target_link_libraries(MegaManXSNESRecomp PRIVATE
-    ${SDL2_LIBRARIES}
     OpenGL::GL
     m                                 # libm: glsl_shader.c uses pow() (implicit on macOS)
+    ${SNESRECOMP_RUNNER_LIBRARIES}    # ws2_32 when trace/cosim builds add the TCP servers
 )
+if(WIN32 AND NOT MSVC)
+    # mingw/msys2: this SDL2 does not auto-rename main()->SDL_main, so main.c's
+    # real main() is the entry point — link SDL2 WITHOUT SDL2main (SDL2main's
+    # WinMain would demand an SDL_main that doesn't exist). Plus DbgHelp for
+    # post_mortem.c's StackWalk64 backtrace. (The macOS/Linux/MSVC paths keep
+    # ${SDL2_LIBRARIES}.)
+    target_link_libraries(MegaManXSNESRecomp PRIVATE
+        C:/msys64/mingw64/lib/libSDL2.dll.a
+        dbghelp)
+else()
+    target_link_libraries(MegaManXSNESRecomp PRIVATE ${SDL2_LIBRARIES})
+endif()
