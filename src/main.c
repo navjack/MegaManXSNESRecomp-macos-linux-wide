@@ -1223,10 +1223,34 @@ error_reading:;
     // Bank validation removed — 100% oracle mode, no banks enabled.
 
     frameCtr++;
+    /* Dev-only headless turbo stress (SNESRECOMP_FORCE_TURBO=1): forces the
+     * turbo path every frame so an automated soak reproduces the turbo
+     * wedge/freeze the user hits by holding Tab under LLE (deterministic repro
+     * of the raster-IRQ-skip stack leak; see the disableRender branch below).
+     * Env-gated; no ship effect. */
+    { static int s_ft = -1;
+      if (s_ft < 0) { const char *e = getenv("SNESRECOMP_FORCE_TURBO");
+                      s_ft = (e && e[0] && e[0] != '0') ? 1 : 0; }
+      if (s_ft) g_turbo = 1; }
     g_snes->disableRender = g_turbo && (frameCtr & 0xf) != 0;
 
-    if (!g_snes->disableRender)
+    if (!g_snes->disableRender) {
       DrawPpuFrameWithPerf();
+    } else {
+      /* Turbo (render skipped): the per-scanline pass (MmxDrawPpuFrame /
+       * draw_ppu_frame) is NOT purely cosmetic — it also simulates HDMA and,
+       * critically, fires the raster IRQ (I_IRQ) that clears MMX's $0BA0
+       * raster-ack flag. Under LLE the game runs the REAL NMI/IRQ handshake
+       * (NmiHandler's `LDA $0B9D ; ORA $0BA0 ; BNE` gate + the $83F1/$82C8 DMA
+       * path); if the raster IRQ never fires, $0BA0 never clears, that path
+       * spins forever, the 5s frame watchdog longjmps out mid-frame WITHOUT
+       * restoring the guest stack pointer, and cpu->S leaks ~17 bytes every
+       * abandoned frame until it underflows into the task table (the "turbo
+       * garble/freeze"). So we still run the guest-state simulation every
+       * frame here — we just skip the host present (BeginDraw/memcpy/EndDraw,
+       * the GPU-bound part turbo exists to elide). */
+      g_rtl_game_info->draw_ppu_frame();
+    }
 
     // if vsync isn't working, delay manually
     curTick = SDL_GetTicks();
