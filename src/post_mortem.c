@@ -48,6 +48,8 @@
 #include "post_mortem.h"
 #include "cpu_state.h"
 #include "cpu_trace.h"
+#include "common_cpu_infra.h"     /* g_rtl_game_info (manifest rom_title) */
+#include "snes/interp_bridge.h"   /* Tier2CoverageDumpJson / WriteManifest */
 
 /* ── External hooks into existing rings ──────────────────────────────── */
 
@@ -60,9 +62,12 @@ extern const char *g_recomp_stack[];
 extern int g_recomp_stack_top;
 extern const char *g_last_recomp_func;
 
-/* Output path — overwritten per dump. */
-static const char *kReportPath =
-    "F:/Projects/snesrecomp/SuperMarioWorldRecomp/build/last_run_report.json";
+/* Output path — overwritten per dump. CWD-relative: MMX runs from several
+ * build trees (build-jp-dbg, build-linux, VS Production), so the report
+ * lands next to wherever the exe was launched from. (Was a stale absolute
+ * SuperMarioWorldRecomp path copied at bring-up — every MMX post-mortem
+ * silently wrote into the SMW repo.) */
+static const char *kReportPath = "last_run_report.json";
 
 /* Mutex so on-demand TCP dump and SEH/atexit dump can't race. */
 #ifdef _WIN32
@@ -628,6 +633,7 @@ void recomp_post_mortem_dump(const char *reason, void *fault_info) {
     dump_status_json(f);
     dump_hardware_state_json(f);
     dump_recomp_stack_json(f);
+    Tier2CoverageDumpJson(f);
     dump_trace_recent_json(f, 256);
     dump_dbpb_recent_json(f);
     dump_tripwires_json(f);
@@ -635,6 +641,15 @@ void recomp_post_mortem_dump(const char *reason, void *fault_info) {
 
     fprintf(f, "}\n");
     fclose(f);
+
+    /* Phase-2 gap manifest: the slim, schema-versioned standalone file the
+     * offline ingest tool (tools/tier2_ingest.py) reads. CWD-relative like
+     * the report. Always-on; empty discoveries on a fully-covered run is
+     * the expected dormant case. This is the JP cfg-enrichment worklist:
+     * play → manifest → tier2_ingest.py → cfg funcs → regen. */
+    Tier2CoverageWriteManifest(
+        "tier2_coverage.json",
+        g_rtl_game_info ? g_rtl_game_info->title : "unknown");
 
     dump_unlock();
 }

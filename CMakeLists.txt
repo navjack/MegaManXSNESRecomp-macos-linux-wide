@@ -131,4 +131,11 @@ add_mmx_variant(RockmanXSNESRecomp
     # JP boots under the interp tier; the IPL upload handshake needs immediate
     # APU port writes (the deferred SMW-missed-SFX scheduler stalls it). USA
     # keeps the deferred default. See runner/src/common_rtl.c RtlApuWrite.
-    SNESRECOMP_APU_IMMEDIATE_PORTS_DEFAULT=1)
+    SNESRECOMP_APU_IMMEDIATE_PORTS_DEFAULT=1
+    # 2026-07-03 status: after the first tier-2 enrichment round (131 promoted
+    # funcs; the old 3-func cfg's bounced-vs-interp split at cp2 was the
+    # unenriched gen mis-slicing), JP now PASSES bounced-vs-interpreted co-sim
+    # 0/4000 (only the masked $02FF interrupt-residue byte) and A-vs-A with
+    # bounce on. Default stays OFF pending deeper-gameplay coverage + owner
+    # sign-off; env SNESRECOMP_LLE_BOUNCE=1 opts in.
+    SNESRECOMP_LLE_BOUNCE_DEFAULT=0)
