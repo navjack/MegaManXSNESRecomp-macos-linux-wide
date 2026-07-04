@@ -156,3 +156,13 @@ under `third_party/` retain their own licenses.
 
 The *Mega Man X* ROM and any data extracted from it are **not** in
 this repo and are not licensed for redistribution.
+
+---
+
+<p align="center">
+  <sub><b>R.A.I.D. — Retro AI Development</b> · a Discord for AI-assisted retro reverse-engineering, decomp &amp; recomp</sub>
+</p>
+
+<p align="center">
+  <a href="https://discord.gg/Ad9BwSzctP"><img src=".github/raid-discord.png" alt="Join the Retro AI Development (R.A.I.D.) Discord" width="200"></a>
+</p>
