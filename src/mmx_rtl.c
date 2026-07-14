@@ -45,52 +45,24 @@ uint8_t g_mmx_task_yield_countdown;
 static int mmx_rtl_diag_enabled(void);
 
 /* Dispatch a cooperative task by its 16-bit entry PC (from RAM $0032+slot).
- *
- * USA: a hardcoded PC->recompiled-body table used only by the optional
- *      C-host HLE fiber scheduler.
- *
- * JP:  NO hardcoded table. JP's default scheduler tier is the faithful LLE
- *      (interp_bridge_run_scheduler), which never calls this. This body only
- *      exists so a forced SNESRECOMP_EXECUTION_MODE=hle on JP still links and
- *      dispatches — it routes the live task PC through the engine's general
- *      runtime dispatch (g_dispatch_table lookup + LoROM mirror; a miss falls
- *      to the interpreter tier rather than the old silent no-op). No
- *      per-variant Task_* symbols, so it links against any JP gen. */
-#if MMX_VARIANT_JP
-static RecompReturn mmx_dispatch_task_pc(CpuState *cpu, uint16_t pc) {
-  return cpu_dispatch_call_pc(cpu, 0x000000u | (uint32_t)pc, 0xFFFFFFu);
-}
-#else
-/* Task-entry handler table. Map handler PC (16-bit) -> C function ptr
- * for the recomp'd task body. */
-extern RecompReturn Task0_M1X1(CpuState *cpu);
-extern RecompReturn Task_89C9_M1X1(CpuState *cpu);
-extern RecompReturn Task_89DB_M1X1(CpuState *cpu);
-extern RecompReturn Task_B091_M1X1(CpuState *cpu);
-extern RecompReturn Task_B25B_M1X1(CpuState *cpu);
-extern RecompReturn Task_B38D_M1X1(CpuState *cpu);
-extern RecompReturn Task_B436_M1X1(CpuState *cpu);
-extern RecompReturn Task_E6B1_M1X1(CpuState *cpu);
-
+ * The optional HLE scheduler uses the same authoritative runtime dispatch as
+ * LLE for both ROM variants. An exact AOT body is an optimization; an absent
+ * body executes the real ROM through the interpreter tier. A separate table
+ * of generated C symbols would make HLE dictate what must be compiled. */
 static RecompReturn mmx_dispatch_task_pc(CpuState *cpu, uint16_t pc) {
   switch (pc) {
-    case 0x852C: return Task0_M1X1(cpu);
-    case 0x89C9: return Task_89C9_M1X1(cpu);
-    case 0x89DB: return Task_89DB_M1X1(cpu);
-    case 0xB091: return Task_B091_M1X1(cpu);
-    case 0xB25B: return Task_B25B_M1X1(cpu);
-    case 0xB38D: return Task_B38D_M1X1(cpu);
-    case 0xB436: return Task_B436_M1X1(cpu);
-    case 0xE6B1: return Task_E6B1_M1X1(cpu);
+    case 0x852C: return cpu_dispatch_call_pc(cpu, 0x00852Cu, 0xFFFFFFu);
+    case 0x89C9: return cpu_dispatch_call_pc(cpu, 0x0089C9u, 0xFFFFFFu);
+    case 0x89DB: return cpu_dispatch_call_pc(cpu, 0x0089DBu, 0xFFFFFFu);
+    case 0xB091: return cpu_dispatch_call_pc(cpu, 0x00B091u, 0xFFFFFFu);
+    case 0xB25B: return cpu_dispatch_call_pc(cpu, 0x00B25Bu, 0xFFFFFFu);
+    case 0xB38D: return cpu_dispatch_call_pc(cpu, 0x00B38Du, 0xFFFFFFu);
+    case 0xB436: return cpu_dispatch_call_pc(cpu, 0x00B436u, 0xFFFFFFu);
+    case 0xE6B1: return cpu_dispatch_call_pc(cpu, 0x00E6B1u, 0xFFFFFFu);
     default:
-      if (mmx_rtl_diag_enabled()) {
-        fprintf(stderr, "[mmx_sched] unknown task PC $00:%04X (slot=$%02X)\n",
-                pc, g_mmx_task_slot_x);
-      }
-      return RECOMP_RETURN_NORMAL;
+      return cpu_dispatch_call_pc(cpu, (uint32_t)pc, 0xFFFFFFu);
   }
 }
-#endif
 
 /* ── Host-fiber-based cooperative scheduler ──────────────────────────
  *
