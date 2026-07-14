@@ -50,18 +50,7 @@ static int mmx_rtl_diag_enabled(void);
  * body executes the real ROM through the interpreter tier. A separate table
  * of generated C symbols would make HLE dictate what must be compiled. */
 static RecompReturn mmx_dispatch_task_pc(CpuState *cpu, uint16_t pc) {
-  switch (pc) {
-    case 0x852C: return cpu_dispatch_call_pc(cpu, 0x00852Cu, 0xFFFFFFu);
-    case 0x89C9: return cpu_dispatch_call_pc(cpu, 0x0089C9u, 0xFFFFFFu);
-    case 0x89DB: return cpu_dispatch_call_pc(cpu, 0x0089DBu, 0xFFFFFFu);
-    case 0xB091: return cpu_dispatch_call_pc(cpu, 0x00B091u, 0xFFFFFFu);
-    case 0xB25B: return cpu_dispatch_call_pc(cpu, 0x00B25Bu, 0xFFFFFFu);
-    case 0xB38D: return cpu_dispatch_call_pc(cpu, 0x00B38Du, 0xFFFFFFu);
-    case 0xB436: return cpu_dispatch_call_pc(cpu, 0x00B436u, 0xFFFFFFu);
-    case 0xE6B1: return cpu_dispatch_call_pc(cpu, 0x00E6B1u, 0xFFFFFFu);
-    default:
-      return cpu_dispatch_call_pc(cpu, (uint32_t)pc, 0xFFFFFFu);
-  }
+  return cpu_dispatch_call_pc(cpu, (uint32_t)pc, 0xFFFFFFu);
 }
 
 /* ── Host-fiber-based cooperative scheduler ──────────────────────────

@@ -131,7 +131,7 @@ Prerequisites: CMake 3.16+, SDL2, Ninja, Python 3.9+
 
 ```bash
 ln -s ../snesrecomp snesrecomp     # sibling framework checkout (see above)
-bash tools/regen.sh --no-tests     # generate src/gen/ (needs a verified mmx.sfc at repo root)
+bash tools/regen.sh usa --no-tests # generate src/gen/ (needs a verified mmx.sfc at repo root)
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$(brew --prefix)"
 cmake --build build
 ./build/MegaManXSNESRecomp         # first run prompts for / caches the ROM path in rom.cfg
@@ -149,13 +149,19 @@ section.
 
 1. Drop a legally-obtained `mmx.sfc` at the repo root (`.gitignore`
    excludes it).
-2. Run `bash tools/regen.sh --no-tests` (drives the recompiler over every
+2. Run `bash tools/regen.sh usa --no-tests` (drives the recompiler over every
    `recomp/bank*.cfg` and writes `src/gen/bankXX_v2.c` + `dispatch_v2.c`).
    On Windows without bash, invoke the underlying tool directly:
    ```bash
    python snesrecomp/tools/v2_emit.py --rom mmx.sfc --cfg-dir recomp --out-dir src/gen
    ```
 3. Rebuild as above.
+
+For Rockman X (Japan v1.1), stage `rockmanx.sfc` under
+`variants/jp/roms/` and run `bash tools/regen.sh jp --no-tests`. The JP path
+uses its checked-in LLE coverage profile as optional AOT input; variants the
+compiler cannot prove remain on the authoritative interpreter fallback.
+`bash tools/regen.sh all` regenerates both regions.
 
 ## Repo layout
 
