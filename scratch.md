@@ -92,6 +92,18 @@ Implement the macOS-native Mega Man X Recomp build in the workspace:
   not a sub-cycle bsnes-style micro-op core. No claim of sub-cycle accuracy is
   made without replacing that core and revalidating the APU timing surface.
 
+## CRT/icon cleanup checkpoint
+
+- NTSC-CRT now decodes into a 320x240 intermediate instead of the 256x224
+  source-sized buffer, then the Metal path scales that result by an integer
+  factor. This preserves the filter's horizontal sampling resolution and its
+  4:3 output geometry.
+- CRT output alpha is explicitly set opaque after demodulation because the
+  library documents alpha as unused and does not write it.
+- Added `assets/MegaManX.icns` and bundle `resources/Info.plist`. The icon is
+  derived from the supplied in-game Mega Man X sprite screenshot and is copied
+  into the app's Resources directory by CMake.
+
 ## Important existing seams
 
 - `RendererFuncs` is in `snesrecomp/runner/src/util.h` and accepts opaque `SDL_Window *`.
