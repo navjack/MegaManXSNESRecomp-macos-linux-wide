@@ -1,4 +1,5 @@
 #import <AudioToolbox/AudioToolbox.h>
+#import <CoreAudio/CoreAudio.h>
 #import <GameController/GameController.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
@@ -183,20 +184,58 @@ void MacMetalRenderer_Create(struct RendererFuncs *funcs) {
 
 static AudioUnit g_audio_unit;
 static float g_audio_volume = 1.0f;
+static int16_t *g_audio_buffer;
+static int g_audio_buffer_frames;
+static int g_audio_buffer_cursor;
+
+static double MacAudio_DefaultOutputRate(void) {
+  AudioDeviceID device = kAudioObjectUnknown;
+  AudioObjectPropertyAddress address = {
+    kAudioHardwarePropertyDefaultOutputDevice,
+    kAudioObjectPropertyScopeGlobal,
+    kAudioObjectPropertyElementMain
+  };
+  UInt32 size = sizeof(device);
+  if (AudioObjectGetPropertyData(kAudioObjectSystemObject, &address, 0, NULL,
+                                 &size, &device) != noErr ||
+      device == kAudioObjectUnknown)
+    return 48000.0;
+  address.mSelector = kAudioDevicePropertyNominalSampleRate;
+  Float64 rate = 48000.0;
+  size = sizeof(rate);
+  if (AudioObjectGetPropertyData(device, &address, 0, NULL, &size, &rate) != noErr ||
+      rate < 8000.0 || rate > 192000.0)
+    return 48000.0;
+  return rate;
+}
 
 static OSStatus MacAudio_Render(void *refcon, AudioUnitRenderActionFlags *flags,
                                 const AudioTimeStamp *timestamp, UInt32 bus,
                                 UInt32 frames, AudioBufferList *data) {
   (void)refcon; (void)flags; (void)timestamp; (void)bus;
-  if (data->mNumberBuffers != 1 || !data->mBuffers[0].mData) return noErr;
-  RtlRenderAudio((int16_t *)data->mBuffers[0].mData, (int)frames, 2);
-  if (g_audio_volume != 1.0f) {
-    int16_t *samples = data->mBuffers[0].mData;
-    size_t count = (size_t)frames * 2;
-    for (size_t i = 0; i < count; ++i) {
-      int value = (int)lrintf(samples[i] * g_audio_volume);
-      samples[i] = (int16_t)(value < -32768 ? -32768 : value > 32767 ? 32767 : value);
+  if (data->mNumberBuffers != 1 || !data->mBuffers[0].mData || !g_audio_buffer)
+    return noErr;
+
+  int16_t *output = data->mBuffers[0].mData;
+  UInt32 remaining = frames;
+  while (remaining != 0) {
+    if (g_audio_buffer_cursor == g_audio_buffer_frames) {
+      /* RtlRenderAudio consumes exactly one 534-sample SNES DSP block and
+       * resamples it into the host-rate block. Core Audio callbacks are not
+       * required to be one video frame long, so retain the unconsumed tail
+       * exactly like the former SDL callback did. */
+      RtlRenderAudio(g_audio_buffer, g_audio_buffer_frames, 2);
+      g_audio_buffer_cursor = 0;
     }
+    int available = g_audio_buffer_frames - g_audio_buffer_cursor;
+    int count = (int)remaining < available ? (int)remaining : available;
+    for (int i = 0; i < count * 2; ++i) {
+      int value = (int)lrintf(g_audio_buffer[(size_t)g_audio_buffer_cursor * 2 + i] * g_audio_volume);
+      output[i] = (int16_t)(value < -32768 ? -32768 : value > 32767 ? 32767 : value);
+    }
+    output += count * 2;
+    g_audio_buffer_cursor += count;
+    remaining -= (UInt32)count;
   }
   return noErr;
 }
@@ -210,9 +249,10 @@ bool MacAudio_Init(int requested_frequency, int requested_samples,
   };
   AudioComponent component = AudioComponentFindNext(NULL, &description);
   if (!component || AudioComponentInstanceNew(component, &g_audio_unit) != noErr) return false;
+  double output_rate = MacAudio_DefaultOutputRate();
   AudioStreamBasicDescription format = {
-    .mSampleRate = requested_frequency, .mFormatID = kAudioFormatLinearPCM,
-    .mFormatFlags = kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked,
+    .mSampleRate = output_rate, .mFormatID = kAudioFormatLinearPCM,
+    .mFormatFlags = kAudioFormatFlagsNativeEndian | kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked,
     .mBytesPerPacket = 4, .mFramesPerPacket = 1, .mBytesPerFrame = 4,
     .mChannelsPerFrame = 2, .mBitsPerChannel = 16
   };
@@ -224,11 +264,16 @@ bool MacAudio_Init(int requested_frequency, int requested_samples,
                            kAudioUnitScope_Input, 0, &callback, sizeof(callback)) != noErr)
     return false;
   if (AudioUnitInitialize(g_audio_unit) != noErr) return false;
-  if (AudioOutputUnitStart(g_audio_unit) != noErr) return false;
-  *actual_frequency = requested_frequency;
+  *actual_frequency = (int)lrint(output_rate);
   *actual_channels = 2;
-  *frames_per_block = (534 * requested_frequency + 32040 / 2) / 32040;
+  *frames_per_block = (534 * *actual_frequency + 32040 / 2) / 32040;
+  g_audio_buffer_frames = *frames_per_block;
+  g_audio_buffer = calloc((size_t)g_audio_buffer_frames * 2, sizeof(*g_audio_buffer));
+  if (!g_audio_buffer) return false;
+  g_audio_buffer_cursor = g_audio_buffer_frames;
+  if (AudioOutputUnitStart(g_audio_unit) != noErr) return false;
   (void)requested_samples;
+  (void)requested_frequency;
   return true;
 }
 
@@ -246,6 +291,10 @@ void MacAudio_Shutdown(void) {
   AudioUnitUninitialize(g_audio_unit);
   AudioComponentInstanceDispose(g_audio_unit);
   g_audio_unit = NULL;
+  free(g_audio_buffer);
+  g_audio_buffer = NULL;
+  g_audio_buffer_frames = 0;
+  g_audio_buffer_cursor = 0;
 }
 
 static uint32_t MacGamepad_Buttons(GCExtendedGamepad *pad, int deadzone) {
