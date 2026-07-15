@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.16)
-project(MegaManXSNESRecomp C)
+project(MegaManXSNESRecomp C CXX)
+
+if(APPLE)
+    enable_language(OBJCXX)
+endif()
 
 # Cross-platform (macOS/Linux) build for MegaManXSNESRecomp.
 #
@@ -22,6 +26,8 @@ project(MegaManXSNESRecomp C)
 # ROM staged); SDL2 (e.g. `brew install sdl2`).
 
 set(CMAKE_C_STANDARD 11)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(SNESRECOMP_ROOT ${CMAKE_SOURCE_DIR}/snesrecomp)
 include(${SNESRECOMP_ROOT}/runner/runner.cmake)
@@ -72,6 +78,17 @@ function(add_mmx_variant TARGET GEN_DIR CFG_INCLUDE_DIR)
 
         $<$<PLATFORM_ID:Darwin>:src/macos_backend.m>
 
+        # Native macOS UI and optional NTSC CRT display filter.
+        $<$<PLATFORM_ID:Darwin>:src/macos_ui.mm>
+        $<$<PLATFORM_ID:Darwin>:third_party/imgui/imgui.cpp>
+        $<$<PLATFORM_ID:Darwin>:third_party/imgui/imgui_draw.cpp>
+        $<$<PLATFORM_ID:Darwin>:third_party/imgui/imgui_tables.cpp>
+        $<$<PLATFORM_ID:Darwin>:third_party/imgui/imgui_widgets.cpp>
+        $<$<PLATFORM_ID:Darwin>:third_party/imgui/backends/imgui_impl_sdl2.cpp>
+        $<$<PLATFORM_ID:Darwin>:third_party/imgui/backends/imgui_impl_metal.mm>
+        $<$<PLATFORM_ID:Darwin>:third_party/ntsc-crt/crt_core.c>
+        $<$<PLATFORM_ID:Darwin>:third_party/ntsc-crt/crt_snes.c>
+
         # OpenGL function loader
         $<$<NOT:$<PLATFORM_ID:Darwin>>:third_party/gl_core/gl_core_3_1.c>
         # recompiled banks (generated, per-variant)
@@ -88,6 +105,13 @@ function(add_mmx_variant TARGET GEN_DIR CFG_INCLUDE_DIR)
         ${SDL2_INCLUDE_DIRS}
     )
 
+    if(APPLE)
+        target_include_directories(${TARGET} PRIVATE
+            ${CMAKE_SOURCE_DIR}/third_party/imgui
+            ${CMAKE_SOURCE_DIR}/third_party/imgui/backends
+            ${CMAKE_SOURCE_DIR}/third_party/ntsc-crt)
+    endif()
+
     target_compile_definitions(${TARGET} PRIVATE
         SMW_DISABLE_LM=1
         SYSTEM_VOLUME_MIXER_AVAILABLE=0   # Win32 WASAPI volume control excluded
@@ -95,6 +119,10 @@ function(add_mmx_variant TARGET GEN_DIR CFG_INCLUDE_DIR)
         SNESRECOMP_REVERSE_DEBUG=0        # raw WRAM stores; matches non-debug generated C
         ${ARGN}
     )
+
+    if(APPLE)
+        target_compile_definitions(${TARGET} PRIVATE CRT_SYSTEM=3)
+    endif()
 
     # The recompiled C is machine-generated; quiet its warnings and tolerate the
     # K&R-style implicit declarations clang rejects by default.

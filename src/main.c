@@ -1233,6 +1233,15 @@ error_reading:;
     host_report_crash_test_tick();
 
     while (SDL_PollEvent(&event)) {
+#ifdef __APPLE__
+      MacUi_ProcessEvent(&event);
+      if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_F1 && !event.key.repeat) {
+        MacUi_Toggle();
+        continue;
+      }
+      if (MacUi_CaptureKeyboard() && event.type != SDL_QUIT)
+        continue;
+#endif
       switch (event.type) {
 #ifndef __APPLE__
       case SDL_CONTROLLERDEVICEADDED:
@@ -1325,6 +1334,11 @@ error_reading:;
      * A B X Y L R). HandleCommand is idempotent for set/clear, so calling
      * it every frame is safe. */
     {
+#ifdef __APPLE__
+      if (MacUi_IsOpen()) {
+        /* Dear ImGui owns keyboard focus while the settings menu is open. */
+      } else {
+#endif
       const uint8_t *keys = SDL_GetKeyboardState(NULL);
       uint16_t kb_p1 = keybinds_read_player(keys, 1);
       uint16_t kb_p2 = keybinds_read_player(keys, 2);
@@ -1333,6 +1347,9 @@ error_reading:;
         HandleCommand(kKeys_Controls   + i, (kb_p1 >> kKb2CtrlsIdx[i]) & 1);
         HandleCommand(kKeys_ControlsP2 + i, (kb_p2 >> kKb2CtrlsIdx[i]) & 1);
       }
+#ifdef __APPLE__
+      }
+#endif
     }
 
 #ifdef __APPLE__

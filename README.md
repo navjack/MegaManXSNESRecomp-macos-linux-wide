@@ -76,7 +76,7 @@ set a key to an empty value there to unbind it, e.g. `DisplayPerf =`):
 | Action               | Default |
 |----------------------|---------|
 | Save state 1-10      | Shift+F1..F10 |
-| Load state 1-10      | F1..F10 |
+| Load state 1-10      | F1..F10 (except macOS F1) |
 | Toggle pause         | P |
 | Pause (dimmed)       | Shift+P |
 | Reset                | Ctrl+R |
@@ -145,6 +145,12 @@ for Xbox/PlayStation/Switch-compatible controllers, and a Core Audio output
 AudioUnit for sound. SDL2 remains only for the window, event loop, and
 keyboard path. `Alt+Enter` toggles fullscreen. The emulator oracle is a
 developer-only feature and is off in this build.
+
+Press `F1` on macOS to open the Dear ImGui display menu. It can enable the
+optional NTSC-CRT mode, scanlines, phosphor blending, signal noise, and hue
+adjustment while the game is running. NTSC-CRT is vendored under
+`third_party/ntsc-crt/` and uses its SNES encoder/decoder path; the normal
+Metal presentation path remains unchanged when the mode is off.
 
 The supported packaged workflow is:
 
