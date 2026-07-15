@@ -2,6 +2,7 @@
 #import <GameController/GameController.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
+#import <simd/simd.h>
 
 #include <math.h>
 #include <stdlib.h>
