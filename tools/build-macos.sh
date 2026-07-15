@@ -12,7 +12,7 @@
 # Usage:
 #   bash tools/build-macos.sh                  # prod .app + .dmg (default)
 #   bash tools/build-macos.sh --config debug   # debug build (TCP server + rings)
-#   bash tools/build-macos.sh --regen          # regen src/gen first
+#   bash tools/build-macos.sh --rom path --regen # regen src/gen first
 #   bash tools/build-macos.sh --no-dmg         # .app only
 #   bash tools/build-macos.sh --arch arm64|x86_64|universal   # default: host arch
 #
@@ -34,6 +34,7 @@ BUNDLE_ID="com.mstan.megamanxrecomp"
 # ============================================================================
 
 CONFIG="prod"; DO_REGEN=0; DO_DMG=1
+ROM_PATH=""
 ARCH="$(uname -m)"   # arm64 on Apple Silicon, x86_64 on Intel
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$REPO/release-macos"
@@ -44,6 +45,7 @@ while [ $# -gt 0 ]; do
     --prod) CONFIG="prod"; shift;;
     --debug) CONFIG="debug"; shift;;
     --regen) DO_REGEN=1; shift;;
+    --rom) ROM_PATH="$2"; shift 2;;
     --no-dmg) DO_DMG=0; shift;;
     --arch) ARCH="$2"; shift 2;;
     --out) OUT="$2"; shift 2;;
@@ -65,11 +67,26 @@ BUILD="$REPO/build-macos-$CONFIG"
 echo "==================== $APP_NAME ($CONFIG, $ARCH) ===================="
 cd "$REPO"
 
+if [ -z "$ROM_PATH" ]; then
+  for candidate in "$REPO"/mmx.sfc "$REPO"/mmx.smc "$REPO"/roms/*.sfc "$REPO"/roms/*.smc; do
+    if [ -f "$candidate" ]; then ROM_PATH="$candidate"; break; fi
+  done
+fi
+
+if [ "$DO_REGEN" = "1" ]; then
+  [ -n "$ROM_PATH" ] || { echo "ERROR: --regen requires --rom path (or a ROM in mmx.sfc/mmx.smc/roms/)" >&2; exit 1; }
+  case "$ROM_PATH" in
+    *.smc) cp "$ROM_PATH" "$REPO/mmx.sfc" ;;
+    *.sfc) cp "$ROM_PATH" "$REPO/mmx.sfc" ;;
+    *) echo "ERROR: ROM must have .sfc or .smc extension" >&2; exit 1;;
+  esac
+  bash "$REPO/tools/regen.sh" usa --no-tests
+fi
+
 RAN_PREBUILD=0
 cleanup() { [ "$RAN_PREBUILD" = "1" ] && [ -n "$POSTBUILD_CMD" ] && { echo "[postbuild] $POSTBUILD_CMD"; eval "$POSTBUILD_CMD" || true; }; return 0; }
 trap cleanup EXIT
 
-[ "$DO_REGEN" = "1" ] && [ -n "$REGEN_CMD" ] && { echo "[regen] $REGEN_CMD"; eval "$REGEN_CMD"; }
 if [ -n "$PREBUILD_CMD" ]; then echo "[prebuild] $PREBUILD_CMD"; RAN_PREBUILD=1; eval "$PREBUILD_CMD"; fi
 
 echo "[1/4] configure"
@@ -78,7 +95,7 @@ cmake -S "$REPO" -B "$BUILD" -DCMAKE_BUILD_TYPE=Release \
 echo "[2/4] build ($CMAKE_TARGET)"
 cmake --build "$BUILD" --target "$CMAKE_TARGET" -j"$(sysctl -n hw.ncpu)"
 
-BIN="$(find "$BUILD" -maxdepth 3 -type f -name "$CMAKE_TARGET" -perm +111 | head -1)"
+BIN="$(find "$BUILD" -type f -path "*/Contents/MacOS/$CMAKE_TARGET" | head -1)"
 [ -n "$BIN" ] || { echo "ERROR: no binary named '$CMAKE_TARGET' under $BUILD" >&2; exit 1; }
 echo "      bin: $BIN"
 

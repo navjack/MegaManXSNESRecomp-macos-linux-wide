@@ -30,18 +30,16 @@ Implement the macOS-native Mega Man X Recomp build in the workspace:
   - Default-output AudioUnit callback calling `RtlRenderAudio`.
   - Native volume/pause/shutdown.
   - `GCController` polling using `GCExtendedGamepad`.
+- Local commits are being made at integration checkpoints. Baseline is
+  `30f6887`; runtime integration is `c6f7b91`; native backend build/link
+  checkpoint is `3aac80a`.
+- Generated USA sources are present locally in ignored `src/gen/` and the
+  arm64 target has configured successfully.
 
 ## Immediate remaining work
 
-1. Patch `CMakeLists.txt` for Apple Objective-C source/framework linkage and Metal default; preserve OpenGL elsewhere.
-2. Patch `src/main.c` to:
-   - use native renderer/audio/gamepad APIs under `__APPLE__`;
-   - keep SDL audio/controller event code for non-Apple builds;
-   - retain `g_audio_mutex` because runner `RtlApuLock()` uses it.
-3. Patch config output method parsing/defaults and macOS packaging/build script.
-4. Normalize the verified `.smc` ROM to a temporary `mmx.sfc`, run `tools/regen.sh usa --no-tests`, then build arm64.
-5. Fix compile/runtime issues found by CMake/build.
-6. Update README and run verification.
+1. Finish README/package-script documentation and smoke tests.
+2. Test the packaged app and inspect linked frameworks.
 
 ## Important existing seams
 
@@ -57,4 +55,3 @@ Implement the macOS-native Mega Man X Recomp build in the workspace:
 - CMake `/opt/homebrew/bin/cmake`, version 4.3.4.
 - `/usr/bin/clang`.
 - Metal compiler available through `xcrun --find metal`.
-

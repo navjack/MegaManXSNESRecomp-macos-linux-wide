@@ -130,16 +130,31 @@ Prerequisites: CMake 3.16+, SDL2, Ninja, Python 3.9+
 (`brew install cmake sdl2 ninja python3`).
 
 ```bash
-ln -s ../snesrecomp snesrecomp     # sibling framework checkout (see above)
-bash tools/regen.sh usa --no-tests # generate src/gen/ (needs a verified mmx.sfc at repo root)
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$(brew --prefix)"
-cmake --build build
-./build/MegaManXSNESRecomp         # first run prompts for / caches the ROM path in rom.cfg
+git clone https://github.com/mstan/snesrecomp.git ../snesrecomp
+ln -s ../snesrecomp snesrecomp
+cp "/path/to/Mega Man X (USA Rev 1).sfc" mmx.sfc
+bash tools/regen.sh usa --no-tests
+cmake -S . -B build-macos -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_PREFIX_PATH="$(brew --prefix)"
+cmake --build build-macos --target MegaManXSNESRecomp
+open build-macos/MegaManXSNESRecomp.app
 ```
 
-`Alt+Enter` toggles fullscreen and SDL game controllers work out of the box
-(see Controls above). The emulator oracle is a developer-only feature and is
-off in this build.
+On macOS, the runtime uses Metal for presentation, `GameController.framework`
+for Xbox/PlayStation/Switch-compatible controllers, and a Core Audio output
+AudioUnit for sound. SDL2 remains only for the window, event loop, and
+keyboard path. `Alt+Enter` toggles fullscreen. The emulator oracle is a
+developer-only feature and is off in this build.
+
+The supported packaged workflow is:
+
+```bash
+bash tools/build-macos.sh --rom "/path/to/your/rom.sfc" --regen --no-dmg
+```
+
+The script builds an arm64 `.app` by default; use `--arch universal` for an
+Intel/Apple Silicon package. The ROM is used only for local regeneration and
+is never copied into release output.
 
 The recompiled C in `src/gen/` is **not** committed — contributors must
 regenerate it from a local ROM before the first build. See the next
@@ -147,8 +162,8 @@ section.
 
 ### Regenerating the recompiled C (contributors)
 
-1. Drop a legally-obtained `mmx.sfc` at the repo root (`.gitignore`
-   excludes it).
+1. Stage a legally-obtained USA Rev 1 ROM as `mmx.sfc` at the repo root
+   (`.gitignore` excludes it), or pass it to `tools/build-macos.sh --rom`.
 2. Run `bash tools/regen.sh usa --no-tests` (drives the recompiler over every
    `recomp/bank*.cfg` and writes `src/gen/bankXX_v2.c` + `dispatch_v2.c`).
    On Windows without bash, invoke the underlying tool directly:
