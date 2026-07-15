@@ -45,6 +45,11 @@ Implement the macOS-native Mega Man X Recomp build in the workspace:
   verification is valid immediately after packaging but becomes invalid after
   first launch because upstream launcher writes config/keybinds and copies the
   selected ROM into the executable directory.
+- Audio diagnosis: the first native callback called `RtlRenderAudio` once per
+  Core Audio callback, incorrectly consuming one 534-native-sample SNES block
+  for arbitrary callback sizes such as 512 frames. The fix restores a host-rate
+  block buffer/cursor and queries the default output nominal sample rate before
+  configuring AudioUnit, so partial callbacks do not advance the SNES clock.
 
 ## Immediate remaining work
 
