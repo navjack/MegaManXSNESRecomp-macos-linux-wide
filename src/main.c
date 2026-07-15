@@ -75,6 +75,8 @@ static uint8_t g_my_pixels[256 * 4 * 240];
 enum {
   kDefaultFullscreen = 0,
   kMaxWindowScale = 10,
+  kMacDisplayWidth = 320,
+  kMacDisplayHeight = 240,
   kDefaultFreq = 44100,
   kDefaultChannels = 2,
   kDefaultSamples = 2048,
@@ -288,14 +290,24 @@ void ChangeWindowScale(int scale_step) {
       bt = 31;
     }
     // Allow a scale level slightly above the max that fits on screen
-    int mw = (bounds.w - bl - br + g_snes_width / 4) / g_snes_width;
-    int mh = (bounds.h - bt - bb + g_snes_height / 4) / g_snes_height;
+    int logical_width = g_snes_width;
+    int logical_height = g_snes_height;
+#ifdef __APPLE__
+    logical_width = kMacDisplayWidth;
+    logical_height = kMacDisplayHeight;
+#endif
+    int mw = (bounds.w - bl - br + logical_width / 4) / logical_width;
+    int mh = (bounds.h - bt - bb + logical_height / 4) / logical_height;
     max_scale = IntMin(mw, mh);
   }
   int new_scale = IntMax(IntMin(g_current_window_scale + scale_step, max_scale), 1);
   g_current_window_scale = new_scale;
   int w = new_scale * g_snes_width;
   int h = new_scale * g_snes_height;
+#ifdef __APPLE__
+  w = new_scale * kMacDisplayWidth;
+  h = new_scale * kMacDisplayHeight;
+#endif
 
   //SDL_RenderSetLogicalSize(g_renderer, w, h);
   SDL_SetWindowSize(g_window, w, h);
@@ -1000,8 +1012,18 @@ int main(int argc, char** argv) {
   keybinds_init(NULL);
 
   bool custom_size = g_config.window_width != 0 && g_config.window_height != 0;
+#ifdef __APPLE__
+  /* macOS presentation is a 4:3 integer-scale surface. Custom dimensions
+   * would create fractional display scaling, so the config dimensions are
+   * intentionally ignored on this backend. */
+  custom_size = false;
+#endif
   int window_width = custom_size ? g_config.window_width : g_current_window_scale * g_snes_width;
   int window_height = custom_size ? g_config.window_height : g_current_window_scale * g_snes_height;
+#ifdef __APPLE__
+  window_width = g_current_window_scale * kMacDisplayWidth;
+  window_height = g_current_window_scale * kMacDisplayHeight;
+#endif
 
  #ifdef __APPLE__
   g_win_flags |= SDL_WINDOW_METAL;
