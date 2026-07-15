@@ -52,6 +52,7 @@ typedef struct MetalRenderer {
   int retro_noise;
   int retro_hue;
   unsigned retro_frame;
+  unsigned retro_field;
 } MetalRenderer;
 
 static MetalRenderer g_metal;
@@ -63,6 +64,7 @@ typedef struct MetalVertex {
 
 static bool MacMetal_Init(SDL_Window *window) {
   memset(&g_metal, 0, sizeof(g_metal));
+  memset(&g_metal.ntsc, 0, sizeof(g_metal.ntsc));
   g_metal.retro_scanlines = 1;
   g_metal.retro_blend = 1;
   g_metal.device = MTLCreateSystemDefaultDevice();
@@ -183,18 +185,20 @@ static void MacMetal_EndDraw(void) {
 
   const uint8_t *frame_pixels = g_metal.pixels;
   if (g_metal.retro_enabled) {
-    memset(&g_metal.ntsc, 0, sizeof(g_metal.ntsc));
     g_metal.ntsc.data = g_metal.pixels;
     g_metal.ntsc.format = CRT_PIX_FORMAT_BGRA;
     g_metal.ntsc.w = g_metal.width;
     g_metal.ntsc.h = g_metal.height;
     g_metal.ntsc.raw = 0;
     g_metal.ntsc.as_color = 1;
+    g_metal.ntsc.field = g_metal.retro_field & 1;
+    g_metal.ntsc.frame = g_metal.retro_frame & 1;
     g_metal.ntsc.hue = g_metal.retro_hue;
-    g_metal.ntsc.frame = g_metal.retro_frame++;
-    g_metal.ntsc.dot_crawl_offset = g_metal.ntsc.frame % CRT_CC_VPER;
+    g_metal.ntsc.dot_crawl_offset = g_metal.retro_frame % CRT_CC_VPER;
     crt_modulate(&g_metal.crt, &g_metal.ntsc);
     crt_demodulate(&g_metal.crt, g_metal.retro_noise);
+    g_metal.retro_field ^= 1;
+    if (g_metal.retro_field == 0) g_metal.retro_frame ^= 1;
     frame_pixels = g_metal.retro_pixels;
   }
   id<MTLTexture> texture = g_metal.textures[g_metal.texture_index++ % 3];
@@ -211,16 +215,21 @@ static void MacMetal_EndDraw(void) {
 
   float viewport_w = (float)g_metal.layer.drawableSize.width;
   float viewport_h = (float)g_metal.layer.drawableSize.height;
-  float source_aspect = (float)g_metal.width / (float)g_metal.height;
-  float viewport_aspect = viewport_w / viewport_h;
-  float sx = 1.0f, sy = 1.0f;
-  if (!g_config.ignore_aspect_ratio) {
-    if (viewport_aspect > source_aspect) sx = source_aspect / viewport_aspect;
-    else sy = viewport_aspect / source_aspect;
-  }
+  int integer_scale = (int)fminf(viewport_w / 320.0f, viewport_h / 240.0f);
+  if (integer_scale < 1) integer_scale = 1;
+  float target_w = 320.0f * (float)integer_scale;
+  float target_h = 240.0f * (float)integer_scale;
+  float left = (viewport_w - target_w) * 0.5f;
+  float top = (viewport_h - target_h) * 0.5f;
+  float right = left + target_w;
+  float bottom = top + target_h;
+  float ndc_left = left * 2.0f / viewport_w - 1.0f;
+  float ndc_right = right * 2.0f / viewport_w - 1.0f;
+  float ndc_top = 1.0f - top * 2.0f / viewport_h;
+  float ndc_bottom = 1.0f - bottom * 2.0f / viewport_h;
   MetalVertex vertices[] = {
-    {{-sx,  sy}, {0, 0}}, {{-sx, -sy}, {0, 1}},
-    {{ sx,  sy}, {1, 0}}, {{ sx, -sy}, {1, 1}},
+    {{ndc_left, ndc_top}, {0, 0}}, {{ndc_left, ndc_bottom}, {0, 1}},
+    {{ndc_right, ndc_top}, {1, 0}}, {{ndc_right, ndc_bottom}, {1, 1}},
   };
   id<MTLCommandBuffer> command = [g_metal.queue commandBuffer];
   id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];

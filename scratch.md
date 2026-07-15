@@ -71,7 +71,26 @@ Implement the macOS-native Mega Man X Recomp build in the workspace:
 
 ## Immediate remaining work
 
-1. Commit the completed NTSC-CRT + ImGui integration after final status check.
+1. Commit the 4:3/integer scaling, save-state menu, and host resampler fixes
+   after final status check.
+
+## Follow-up facts from the scaling/audio audit
+
+- The rendered game surface is 256x224 by default (240-line mode is a
+  separate PPU option). macOS now presents it through a 320x240 4:3 base
+  surface, selecting only integer scales and centering unused drawable space.
+- NTSC-CRT receives the contiguous PPU BGRA framebuffer with its actual width
+  and height, `raw=0`, color enabled, and persistent IIR/field state. The
+  previous integration accidentally zeroed `NTSC_SETTINGS` every frame,
+  reinitializing the filter state; that is fixed.
+- The existing S-DSP path already contains the canonical BRR predictor filters
+  and 4-tap Gaussian table. The host-rate conversion was nearest-sample hold;
+  it now linearly reconstructs non-native output rates while retaining the
+  native 534-sample cadence.
+- The existing SPC700 core executes instructions with the canonical cycle
+  table and correct taken-branch timing, but it is instruction-cycle stepped,
+  not a sub-cycle bsnes-style micro-op core. No claim of sub-cycle accuracy is
+  made without replacing that core and revalidating the APU timing surface.
 
 ## Important existing seams
 

@@ -152,6 +152,18 @@ adjustment while the game is running. NTSC-CRT is vendored under
 `third_party/ntsc-crt/` and uses its SNES encoder/decoder path; the normal
 Metal presentation path remains unchanged when the mode is off.
 
+macOS presentation uses a 320×240 4:3 base surface and only integer scales
+(1×, 2×, 3×, ...). Resizing or fullscreen leaves centered black borders rather
+than applying a fractional scale. The F1 menu also exposes Save/Load buttons
+for the ten existing serialized savestate slots; the keyboard bindings remain
+available as documented below.
+
+The S-DSP retains the SNES BRR predictor filters and canonical four-tap
+Gaussian interpolation. Host-rate conversion uses continuous interpolation
+instead of nearest-sample hold. The current SPC700 core is instruction-cycle
+stepped with canonical opcode timing; a sub-cycle bsnes-style SPC700 core is a
+separate emulator-core replacement and is not represented as complete here.
+
 The supported packaged workflow is:
 
 ```bash
