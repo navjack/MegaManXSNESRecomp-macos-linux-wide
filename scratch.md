@@ -35,11 +35,20 @@ Implement the macOS-native Mega Man X Recomp build in the workspace:
   checkpoint is `3aac80a`.
 - Generated USA sources are present locally in ignored `src/gen/` and the
   arm64 target has configured successfully.
+- Native arm64 build succeeded in `build-macos-native/` and through
+  `tools/build-macos.sh --rom ... --regen --no-dmg`.
+- Packaged smoke test reached `renderer initialized: metal`, native audio at
+  32040 Hz, `entering main loop`, and `first frame simulated`; the deliberate
+  timeout returned 124 with no runtime error.
+- Packaged app contains `Contents/Frameworks/libSDL2-2.0.0.dylib` and uses
+  `@executable_path/../Frameworks/libSDL2-2.0.0.dylib`. Strict codesign
+  verification is valid immediately after packaging but becomes invalid after
+  first launch because upstream launcher writes config/keybinds and copies the
+  selected ROM into the executable directory.
 
 ## Immediate remaining work
 
-1. Finish README/package-script documentation and smoke tests.
-2. Test the packaged app and inspect linked frameworks.
+1. Rebuild after wireless-controller discovery addition and commit final state.
 
 ## Important existing seams
 
