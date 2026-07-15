@@ -71,6 +71,17 @@ static bool MacMetal_Init(SDL_Window *window) {
   MTLRenderPipelineDescriptor *descriptor = [MTLRenderPipelineDescriptor new];
   descriptor.vertexFunction = [library newFunctionWithName:@"vs"];
   descriptor.fragmentFunction = [library newFunctionWithName:@"fs"];
+  MTLVertexDescriptor *vertex = [MTLVertexDescriptor vertexDescriptor];
+  vertex.attributes[0].format = MTLVertexFormatFloat2;
+  vertex.attributes[0].offset = 0;
+  vertex.attributes[0].bufferIndex = 0;
+  vertex.attributes[1].format = MTLVertexFormatFloat2;
+  vertex.attributes[1].offset = sizeof(vector_float2);
+  vertex.attributes[1].bufferIndex = 0;
+  vertex.layouts[0].stride = sizeof(MetalVertex);
+  vertex.layouts[0].stepRate = 1;
+  vertex.layouts[0].stepFunction = MTLVertexStepFunctionPerVertex;
+  descriptor.vertexDescriptor = vertex;
   descriptor.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
   g_metal.pipeline = [g_metal.device newRenderPipelineStateWithDescriptor:descriptor error:&error];
   if (!g_metal.pipeline) {
