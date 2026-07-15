@@ -164,8 +164,13 @@ function(add_mmx_variant TARGET GEN_DIR CFG_INCLUDE_DIR)
     snesrecomp_target_launcher_ng(${TARGET}
         BOXART ${CMAKE_SOURCE_DIR}/recomp/launcher/boxart.tga)
     if(APPLE)
+        set(_MMX_ICON ${CMAKE_SOURCE_DIR}/assets/MegaManX.icns)
+        target_sources(${TARGET} PRIVATE ${_MMX_ICON})
+        set_source_files_properties(${_MMX_ICON} PROPERTIES
+            MACOSX_PACKAGE_LOCATION Resources)
         set_target_properties(${TARGET} PROPERTIES
             MACOSX_BUNDLE TRUE
+            MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/resources/Info.plist
             MACOSX_BUNDLE_GUI_IDENTIFIER "com.mstan.megamanxrecomp"
             MACOSX_BUNDLE_BUNDLE_NAME "Mega Man X Recomp"
             MACOSX_BUNDLE_SHORT_VERSION_STRING "0.1.0"

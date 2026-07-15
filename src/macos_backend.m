@@ -29,6 +29,9 @@ extern "C" {
 }
 #endif
 
+#define CRT_OUTPUT_WIDTH 320
+#define CRT_OUTPUT_HEIGHT 240
+
 typedef struct MetalRenderer {
   SDL_MetalView view;
   CAMetalLayer *layer;
@@ -42,6 +45,7 @@ typedef struct MetalRenderer {
   size_t pixels_size;
   size_t retro_pixels_size;
   int width, height;
+  int texture_width, texture_height;
   unsigned texture_index;
   struct CRT crt;
   struct NTSC_SETTINGS ntsc;
@@ -147,17 +151,20 @@ static void MacMetal_BeginDraw(int width, int height, uint8 **pixels, int *pitch
     g_metal.pixels = new_pixels;
     g_metal.pixels_size = size;
   }
-  if (size > g_metal.retro_pixels_size || !g_metal.retro_pixels) {
-    uint8_t *new_retro_pixels = (uint8_t *)realloc(g_metal.retro_pixels, size);
+  size_t retro_size = (size_t)CRT_OUTPUT_WIDTH * (size_t)CRT_OUTPUT_HEIGHT * 4;
+  if (retro_size > g_metal.retro_pixels_size || !g_metal.retro_pixels) {
+    uint8_t *new_retro_pixels = (uint8_t *)realloc(g_metal.retro_pixels, retro_size);
     if (!new_retro_pixels) Die("CRT framebuffer allocation failed");
     g_metal.retro_pixels = new_retro_pixels;
-    g_metal.retro_pixels_size = size;
+    g_metal.retro_pixels_size = retro_size;
   }
   if (!g_metal.crt_initialized || g_metal.crt.outw != width || g_metal.crt.outh != height) {
     if (!g_metal.crt_initialized)
-      crt_init(&g_metal.crt, width, height, CRT_PIX_FORMAT_BGRA, g_metal.retro_pixels);
+      crt_init(&g_metal.crt, CRT_OUTPUT_WIDTH, CRT_OUTPUT_HEIGHT,
+               CRT_PIX_FORMAT_BGRA, g_metal.retro_pixels);
     else
-      crt_resize(&g_metal.crt, width, height, CRT_PIX_FORMAT_BGRA, g_metal.retro_pixels);
+      crt_resize(&g_metal.crt, CRT_OUTPUT_WIDTH, CRT_OUTPUT_HEIGHT,
+                 CRT_PIX_FORMAT_BGRA, g_metal.retro_pixels);
     g_metal.crt_initialized = true;
     g_metal.crt.scanlines = g_metal.retro_scanlines;
     g_metal.crt.blend = g_metal.retro_blend;
@@ -168,10 +175,11 @@ static void MacMetal_BeginDraw(int width, int height, uint8 **pixels, int *pitch
   *pitch = width * 4;
 }
 
-static void MacMetal_CreateTextures(void) {
+static void MacMetal_CreateTextures(int width, int height) {
+  for (int i = 0; i < 3; ++i) g_metal.textures[i] = nil;
   MTLTextureDescriptor *descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
-                                                                                          width:g_metal.width
-                                                                                         height:g_metal.height
+                                                                                          width:width
+                                                                                         height:height
                                                                                       mipmapped:NO];
   descriptor.usage = MTLTextureUsageShaderRead;
   descriptor.storageMode = MTLStorageModeShared;
@@ -179,11 +187,9 @@ static void MacMetal_CreateTextures(void) {
 }
 
 static void MacMetal_EndDraw(void) {
-  if (!g_metal.textures[0] || g_metal.textures[0].width != (NSUInteger)g_metal.width ||
-      g_metal.textures[0].height != (NSUInteger)g_metal.height)
-    MacMetal_CreateTextures();
-
   const uint8_t *frame_pixels = g_metal.pixels;
+  int frame_width = g_metal.width;
+  int frame_height = g_metal.height;
   if (g_metal.retro_enabled) {
     g_metal.ntsc.data = g_metal.pixels;
     g_metal.ntsc.format = CRT_PIX_FORMAT_BGRA;
@@ -197,13 +203,24 @@ static void MacMetal_EndDraw(void) {
     g_metal.ntsc.dot_crawl_offset = g_metal.retro_frame % CRT_CC_VPER;
     crt_modulate(&g_metal.crt, &g_metal.ntsc);
     crt_demodulate(&g_metal.crt, g_metal.retro_noise);
+    for (int y = 0; y < CRT_OUTPUT_HEIGHT; ++y)
+      for (int x = 0; x < CRT_OUTPUT_WIDTH; ++x)
+        g_metal.retro_pixels[(y * CRT_OUTPUT_WIDTH + x) * 4 + 3] = 255;
     g_metal.retro_field ^= 1;
     if (g_metal.retro_field == 0) g_metal.retro_frame ^= 1;
     frame_pixels = g_metal.retro_pixels;
+    frame_width = CRT_OUTPUT_WIDTH;
+    frame_height = CRT_OUTPUT_HEIGHT;
+  }
+  if (!g_metal.textures[0] || g_metal.texture_width != frame_width ||
+      g_metal.texture_height != frame_height) {
+    MacMetal_CreateTextures(frame_width, frame_height);
+    g_metal.texture_width = frame_width;
+    g_metal.texture_height = frame_height;
   }
   id<MTLTexture> texture = g_metal.textures[g_metal.texture_index++ % 3];
-  MTLRegion region = MTLRegionMake2D(0, 0, g_metal.width, g_metal.height);
-  [texture replaceRegion:region mipmapLevel:0 withBytes:frame_pixels bytesPerRow:g_metal.width * 4];
+  MTLRegion region = MTLRegionMake2D(0, 0, frame_width, frame_height);
+  [texture replaceRegion:region mipmapLevel:0 withBytes:frame_pixels bytesPerRow:frame_width * 4];
 
   id<CAMetalDrawable> drawable = [g_metal.layer nextDrawable];
   if (!drawable) return;
