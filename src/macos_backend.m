@@ -3,6 +3,7 @@
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 #import <simd/simd.h>
+#import <dispatch/dispatch.h>
 
 #include <math.h>
 #include <stdlib.h>
@@ -275,6 +276,10 @@ static uint32_t MacGamepad_Buttons(GCExtendedGamepad *pad, int deadzone) {
 void MacGamepad_Poll(bool enable_player1, bool enable_player2, int deadzone,
                      uint32_t *player1, uint32_t *player2,
                      uint32_t *active_players) {
+  static dispatch_once_t discovery_once;
+  dispatch_once(&discovery_once, ^{
+    [GCController startWirelessControllerDiscoveryWithCompletionHandler:nil];
+  });
   *player1 = *player2 = *active_players = 0;
   NSArray<GCController *> *controllers = GCController.controllers;
   for (NSUInteger i = 0; i < controllers.count && i < 2; ++i) {
