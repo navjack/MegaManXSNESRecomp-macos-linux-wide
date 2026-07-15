@@ -50,6 +50,9 @@ Implement the macOS-native Mega Man X Recomp build in the workspace:
   for arbitrary callback sizes such as 512 frames. The fix restores a host-rate
   block buffer/cursor and queries the default output nominal sample rate before
   configuring AudioUnit, so partial callbacks do not advance the SNES clock.
+- Follow-up hardening uses the AudioUnit negotiated client rate/channels for
+  the final block-size calculation and reports device rate, negotiated format,
+  and callback frame size once in the host breadcrumb log.
 
 ## Immediate remaining work
 
