@@ -32,6 +32,9 @@ enum {
   kOutputMethod_SDL,
   kOutputMethod_SDLSoftware,
   kOutputMethod_OpenGL,
+#if defined(__APPLE__)
+  kOutputMethod_Metal,
+#endif
 };
 
 typedef struct Config {

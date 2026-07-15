@@ -28,7 +28,9 @@ include(${SNESRECOMP_ROOT}/runner/runner.cmake)
 include(${SNESRECOMP_ROOT}/runner/src/launcher_ng/launcher_ng.cmake)
 
 find_package(SDL2 REQUIRED)
-find_package(OpenGL REQUIRED)
+if(NOT APPLE)
+    find_package(OpenGL REQUIRED)
+endif()
 
 # prod-vs-debug via the single SNESRECOMP_ENABLE_TRACE switch (runner.cmake,
 # default OFF). Prod: no debug_server.c / TCP server / rings. Debug:
@@ -57,10 +59,10 @@ function(add_mmx_variant TARGET GEN_DIR CFG_INCLUDE_DIR)
         ${SNESRECOMP_RUNNER_SOURCES}
         # game-specific runtime (shared across both variants)
         src/config.c
-        src/glsl_shader.c
+        $<$<NOT:$<PLATFORM_ID:Darwin>>:src/glsl_shader.c>
         src/main.c
         src/post_mortem.c
-        src/opengl.c
+        $<$<NOT:$<PLATFORM_ID:Darwin>>:src/opengl.c>
         src/mmx_00.c
         src/gen_stubs.c
         src/mmx_cpu_infra.c
@@ -68,8 +70,10 @@ function(add_mmx_variant TARGET GEN_DIR CFG_INCLUDE_DIR)
         src/mmx_spc_player.c
         src/fiber_compat.c    # Win32 Fiber API shim (ucontext) for non-Windows
 
+        $<$<PLATFORM_ID:Darwin>:src/macos_backend.m>
+
         # OpenGL function loader
-        third_party/gl_core/gl_core_3_1.c
+        $<$<NOT:$<PLATFORM_ID:Darwin>>:third_party/gl_core/gl_core_3_1.c>
         # recompiled banks (generated, per-variant)
         ${_MMX_GEN}
     )
@@ -100,10 +104,19 @@ function(add_mmx_variant TARGET GEN_DIR CFG_INCLUDE_DIR)
     endif()
 
     target_link_libraries(${TARGET} PRIVATE
-        OpenGL::GL
-        m                                 # libm: glsl_shader.c uses pow() (implicit on macOS)
+        m                                 # libm: runtime math
         ${SNESRECOMP_RUNNER_LIBRARIES}    # ws2_32 when trace/cosim builds add the TCP servers
     )
+    if(APPLE)
+        target_link_libraries(${TARGET} PRIVATE
+            "-framework Metal"
+            "-framework QuartzCore"
+            "-framework GameController"
+            "-framework AudioToolbox")
+        target_compile_definitions(${TARGET} PRIVATE MMX_MACOS_NATIVE=1)
+    else()
+        target_link_libraries(${TARGET} PRIVATE OpenGL::GL)
+    endif()
     if(WIN32 AND NOT MSVC)
         # mingw/msys2: this SDL2 does not auto-rename main()->SDL_main, so main.c's
         # real main() is the entry point — link SDL2 WITHOUT SDL2main (SDL2main's
@@ -120,6 +133,14 @@ function(add_mmx_variant TARGET GEN_DIR CFG_INCLUDE_DIR)
     # SNES_LAUNCHER/CXX/asset-staging; see launcher_ng/launcher_ng.cmake.
     snesrecomp_target_launcher_ng(${TARGET}
         BOXART ${CMAKE_SOURCE_DIR}/recomp/launcher/boxart.tga)
+    if(APPLE)
+        set_target_properties(${TARGET} PROPERTIES
+            MACOSX_BUNDLE TRUE
+            MACOSX_BUNDLE_GUI_IDENTIFIER "com.mstan.megamanxrecomp"
+            MACOSX_BUNDLE_BUNDLE_NAME "Mega Man X Recomp"
+            MACOSX_BUNDLE_SHORT_VERSION_STRING "0.1.0"
+             MACOSX_BUNDLE_BUNDLE_VERSION "0.1.0")
+    endif()
 endfunction()
 
 # ── USA: Mega Man X (v1.1) — faithful LLE scheduler by default ──
