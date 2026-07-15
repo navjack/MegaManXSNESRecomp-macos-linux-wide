@@ -54,9 +54,24 @@ Implement the macOS-native Mega Man X Recomp build in the workspace:
   the final block-size calculation and reports device rate, negotiated format,
   and callback frame size once in the host breadcrumb log.
 
+## NTSC-CRT + ImGui work in progress
+
+- Vendored `third_party/ntsc-crt/` at upstream commit
+  `c1fdabf4584a92314e9d7523eab124e253bda07c` and `third_party/imgui/` at
+  upstream commit `b62bfd6b06de958e4630b715225b7e8409bfd0f9`.
+- Added an Apple-only Dear ImGui Metal/SDL2 menu in `src/macos_ui.mm`.
+  `F1` toggles it and the menu owns keyboard input while open.
+- Added optional SNES NTSC encode/decode display processing to the Metal
+  backend. It defaults off and exposes scanlines, phosphor blend, noise, and
+  hue controls. Dot-crawl phase advances every frame.
+- CMake now enables C++/Objective-C++ on Apple and compiles ImGui plus
+  NTSC-CRT only for the macOS target. The arm64 Release target builds and
+  links Metal, GameController, CoreAudio, AudioToolbox, and SDL2.
+- README documents the mode and the macOS F1/load-state key conflict.
+
 ## Immediate remaining work
 
-1. Rebuild after wireless-controller discovery addition and commit final state.
+1. Commit the completed NTSC-CRT + ImGui integration after final status check.
 
 ## Important existing seams
 

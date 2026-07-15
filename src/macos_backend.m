@@ -14,10 +14,20 @@
 #include <SDL_metal.h>
 
 #include "macos_backend.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 #include "config.h"
 #include "host_report.h"
 #include "mmx_rtl.h"
 #include "util.h"
+
+#define CRT_SYSTEM CRT_SYSTEM_SNES
+#include "crt_core.h"
+#ifdef __cplusplus
+}
+#endif
 
 typedef struct MetalRenderer {
   SDL_MetalView view;
@@ -28,9 +38,20 @@ typedef struct MetalRenderer {
   id<MTLSamplerState> sampler;
   id<MTLTexture> textures[3];
   uint8_t *pixels;
+  uint8_t *retro_pixels;
   size_t pixels_size;
+  size_t retro_pixels_size;
   int width, height;
   unsigned texture_index;
+  struct CRT crt;
+  struct NTSC_SETTINGS ntsc;
+  bool crt_initialized;
+  bool retro_enabled;
+  int retro_scanlines;
+  int retro_blend;
+  int retro_noise;
+  int retro_hue;
+  unsigned retro_frame;
 } MetalRenderer;
 
 static MetalRenderer g_metal;
@@ -42,6 +63,8 @@ typedef struct MetalVertex {
 
 static bool MacMetal_Init(SDL_Window *window) {
   memset(&g_metal, 0, sizeof(g_metal));
+  g_metal.retro_scanlines = 1;
+  g_metal.retro_blend = 1;
   g_metal.device = MTLCreateSystemDefaultDevice();
   if (!g_metal.device) {
     fprintf(stderr, "Metal device creation failed\n");
@@ -97,13 +120,18 @@ static bool MacMetal_Init(SDL_Window *window) {
   sampler.minFilter = g_config.linear_filtering ? MTLSamplerMinMagFilterLinear : MTLSamplerMinMagFilterNearest;
   sampler.magFilter = sampler.minFilter;
   g_metal.sampler = [g_metal.device newSamplerStateWithDescriptor:sampler];
+  MacUi_Init(window, (__bridge void *)g_metal.device);
   return true;
 }
 
 static void MacMetal_Destroy(void) {
+  MacUi_Shutdown();
   free(g_metal.pixels);
+  free(g_metal.retro_pixels);
   g_metal.pixels = NULL;
+  g_metal.retro_pixels = NULL;
   g_metal.pixels_size = 0;
+  g_metal.retro_pixels_size = 0;
   for (int i = 0; i < 3; ++i) g_metal.textures[i] = nil;
   if (g_metal.view) SDL_Metal_DestroyView(g_metal.view);
   memset(&g_metal, 0, sizeof(g_metal));
@@ -112,10 +140,25 @@ static void MacMetal_Destroy(void) {
 static void MacMetal_BeginDraw(int width, int height, uint8 **pixels, int *pitch) {
   size_t size = (size_t)width * (size_t)height * 4;
   if (size > g_metal.pixels_size) {
-    uint8_t *new_pixels = realloc(g_metal.pixels, size);
+    uint8_t *new_pixels = (uint8_t *)realloc(g_metal.pixels, size);
     if (!new_pixels) Die("Metal framebuffer allocation failed");
     g_metal.pixels = new_pixels;
     g_metal.pixels_size = size;
+  }
+  if (size > g_metal.retro_pixels_size || !g_metal.retro_pixels) {
+    uint8_t *new_retro_pixels = (uint8_t *)realloc(g_metal.retro_pixels, size);
+    if (!new_retro_pixels) Die("CRT framebuffer allocation failed");
+    g_metal.retro_pixels = new_retro_pixels;
+    g_metal.retro_pixels_size = size;
+  }
+  if (!g_metal.crt_initialized || g_metal.crt.outw != width || g_metal.crt.outh != height) {
+    if (!g_metal.crt_initialized)
+      crt_init(&g_metal.crt, width, height, CRT_PIX_FORMAT_BGRA, g_metal.retro_pixels);
+    else
+      crt_resize(&g_metal.crt, width, height, CRT_PIX_FORMAT_BGRA, g_metal.retro_pixels);
+    g_metal.crt_initialized = true;
+    g_metal.crt.scanlines = g_metal.retro_scanlines;
+    g_metal.crt.blend = g_metal.retro_blend;
   }
   g_metal.width = width;
   g_metal.height = height;
@@ -138,9 +181,25 @@ static void MacMetal_EndDraw(void) {
       g_metal.textures[0].height != (NSUInteger)g_metal.height)
     MacMetal_CreateTextures();
 
+  const uint8_t *frame_pixels = g_metal.pixels;
+  if (g_metal.retro_enabled) {
+    memset(&g_metal.ntsc, 0, sizeof(g_metal.ntsc));
+    g_metal.ntsc.data = g_metal.pixels;
+    g_metal.ntsc.format = CRT_PIX_FORMAT_BGRA;
+    g_metal.ntsc.w = g_metal.width;
+    g_metal.ntsc.h = g_metal.height;
+    g_metal.ntsc.raw = 0;
+    g_metal.ntsc.as_color = 1;
+    g_metal.ntsc.hue = g_metal.retro_hue;
+    g_metal.ntsc.frame = g_metal.retro_frame++;
+    g_metal.ntsc.dot_crawl_offset = g_metal.ntsc.frame % CRT_CC_VPER;
+    crt_modulate(&g_metal.crt, &g_metal.ntsc);
+    crt_demodulate(&g_metal.crt, g_metal.retro_noise);
+    frame_pixels = g_metal.retro_pixels;
+  }
   id<MTLTexture> texture = g_metal.textures[g_metal.texture_index++ % 3];
   MTLRegion region = MTLRegionMake2D(0, 0, g_metal.width, g_metal.height);
-  [texture replaceRegion:region mipmapLevel:0 withBytes:g_metal.pixels bytesPerRow:g_metal.width * 4];
+  [texture replaceRegion:region mipmapLevel:0 withBytes:frame_pixels bytesPerRow:g_metal.width * 4];
 
   id<CAMetalDrawable> drawable = [g_metal.layer nextDrawable];
   if (!drawable) return;
@@ -170,6 +229,7 @@ static void MacMetal_EndDraw(void) {
   [encoder setFragmentTexture:texture atIndex:0];
   [encoder setFragmentSamplerState:g_metal.sampler atIndex:0];
   [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+  MacUi_Render((__bridge void *)pass, (__bridge void *)command, (__bridge void *)encoder);
   [encoder endEncoding];
   [command presentDrawable:drawable];
   [command commit];
@@ -181,6 +241,25 @@ static const struct RendererFuncs kMacMetalRendererFuncs = {
 
 void MacMetalRenderer_Create(struct RendererFuncs *funcs) {
   *funcs = kMacMetalRendererFuncs;
+}
+
+void MacMetal_SetRetroEnabled(bool enabled) { g_metal.retro_enabled = enabled; }
+bool MacMetal_GetRetroEnabled(void) { return g_metal.retro_enabled; }
+
+void MacMetal_SetRetroOptions(int scanlines, int blend, int noise, int hue) {
+  g_metal.retro_scanlines = scanlines != 0;
+  g_metal.retro_blend = blend != 0;
+  g_metal.retro_noise = noise < 0 ? 0 : noise;
+  g_metal.retro_hue = hue;
+  g_metal.crt.scanlines = g_metal.retro_scanlines;
+  g_metal.crt.blend = g_metal.retro_blend;
+}
+
+void MacMetal_GetRetroOptions(int *scanlines, int *blend, int *noise, int *hue) {
+  if (scanlines) *scanlines = g_metal.retro_scanlines;
+  if (blend) *blend = g_metal.retro_blend;
+  if (noise) *noise = g_metal.retro_noise;
+  if (hue) *hue = g_metal.retro_hue;
 }
 
 static AudioUnit g_audio_unit;
@@ -217,7 +296,7 @@ static OSStatus MacAudio_Render(void *refcon, AudioUnitRenderActionFlags *flags,
   if (data->mNumberBuffers != 1 || !data->mBuffers[0].mData || !g_audio_buffer)
     return noErr;
 
-  int16_t *output = data->mBuffers[0].mData;
+  int16_t *output = (int16_t *)data->mBuffers[0].mData;
   static int callback_reported;
   if (!callback_reported) {
     callback_reported = 1;
@@ -289,7 +368,8 @@ bool MacAudio_Init(int requested_frequency, int requested_samples,
   *actual_channels = client_channels;
   *frames_per_block = (534 * *actual_frequency + 32040 / 2) / 32040;
   g_audio_buffer_frames = *frames_per_block;
-  g_audio_buffer = calloc((size_t)g_audio_buffer_frames * 2, sizeof(*g_audio_buffer));
+  g_audio_buffer = (int16_t *)calloc((size_t)g_audio_buffer_frames * 2,
+                                     sizeof(*g_audio_buffer));
   if (!g_audio_buffer) return false;
   g_audio_buffer_cursor = g_audio_buffer_frames;
   host_report_breadcrumb("native audio format: device=%.2f negotiated=%.2f channels=%u block=%d",
