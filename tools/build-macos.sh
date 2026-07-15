@@ -148,7 +148,16 @@ if command -v dylibbundler >/dev/null 2>&1; then
   dylibbundler -od -b -x "$APPDIR/Contents/MacOS/$CMAKE_TARGET" \
       -d "$APPDIR/Contents/Frameworks" -p @executable_path/../Frameworks
 else
-  echo "      WARNING: dylibbundler not found — .app will need a system SDL2."
+  SDL_DYLIB="$(otool -L "$APPDIR/Contents/MacOS/$CMAKE_TARGET" | awk '/libSDL2.*dylib/ { print $1; exit }')"
+  if [ -n "$SDL_DYLIB" ] && [ -f "$SDL_DYLIB" ]; then
+    SDL_NAME="$(basename "$SDL_DYLIB")"
+    cp "$SDL_DYLIB" "$APPDIR/Contents/Frameworks/$SDL_NAME"
+    install_name_tool -change "$SDL_DYLIB" "@executable_path/../Frameworks/$SDL_NAME" \
+      "$APPDIR/Contents/MacOS/$CMAKE_TARGET"
+    echo "      bundled $SDL_NAME (dylibbundler unavailable)"
+  else
+    echo "      WARNING: SDL2 dylib not found — .app will need a system SDL2."
+  fi
 fi
 # Ad-hoc codesign so Gatekeeper lets it run locally (no Developer ID required).
 codesign --force --deep --sign - "$APPDIR" 2>/dev/null || \
