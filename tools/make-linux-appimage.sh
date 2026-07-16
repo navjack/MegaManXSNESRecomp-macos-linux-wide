@@ -10,6 +10,7 @@ mkdir -p "$WORK/AppDir/usr/bin" "$WORK/AppDir/usr/share/applications" "$WORK/App
 cp "$BIN" "$WORK/AppDir/usr/bin/MegaManXSNESRecomp"
 cp -R "$(dirname "$BIN")/assets" "$WORK/AppDir/usr/bin/"
 cp "$ROOT/config.ini" "$WORK/AppDir/usr/bin/"
+find "$WORK/AppDir" -name .DS_Store -delete
 cat > "$WORK/AppDir/AppRun" <<'EOF'
 #!/bin/sh
 HERE="$(dirname "$(readlink -f "$0")")"
