@@ -92,3 +92,4 @@ variants/*/gen/
 build-jp/
 build-jp-dbg/
 build-release-jp/
+build-codex-sync/
