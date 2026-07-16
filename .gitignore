@@ -82,6 +82,7 @@ packages/
 
 # Release artifacts (built locally, uploaded via gh release upload)
 MegaManXSNESRecomp-windows-*.zip
+MegaManXSNESRecomp-steamdeck-*.7z
 MegamanXRecomp-windows-*.zip
 mmx-v*.zip
 release-stage/
