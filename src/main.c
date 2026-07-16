@@ -166,7 +166,6 @@ static void MmxDisplay_PreparePpuFrame(void) {
               (g_ppu_render_flags & kPpuRenderFlags_NewRenderer) != 0;
   PpuBeginDrawing(g_ppu, g_my_pixels, (size_t)width * 4, 0);
   PpuSetExtraSpace(g_ppu, (uint8)g_ws_extra);
-  PpuSetWidescreenLineEnhancer(g_ppu, MmxWidePreview_EnhancePpuLine);
 }
 
 void MmxDisplay_SetWidescreenEnabled(bool enabled) {

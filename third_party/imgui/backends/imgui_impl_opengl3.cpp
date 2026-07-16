@@ -1157,3 +1157,9 @@ void    ImGui_ImplOpenGL3_Shutdown()
 #endif
 
 #endif // #ifndef IMGUI_DISABLE
+
+// launcher_ng calls these legacy entry points after changing the font atlas.
+// New ImGui backends consume atlas updates from NewFrame(), so they are
+// intentionally no-ops kept as an ABI bridge for the dependency's launcher.
+bool ImGui_ImplOpenGL3_CreateFontsTexture() { return true; }
+void ImGui_ImplOpenGL3_DestroyFontsTexture() {}
