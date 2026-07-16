@@ -23,7 +23,7 @@ Harden true widescreen across the shared PPU, MMX renderer, predictive-enemy ove
 - Replace unchecked ROM reads with a bounded ROM-view API sourced from the loaded cartridge size. Validate LoROM translations, tables, decompression streams, palettes, arrangements, and enemy-event records before caching or drawing.
 - Register the BG1 enhancer only when the current playable-stage data validates; otherwise retain the generic PPU path rather than suppressing margins.
 - Suppress previews during forced blank, invalid stages, and zero brightness; apply the current PPU brightness/fade to cached source colors while leaving guest RAM, OAM, CGRAM, object slots, AI, collision, and spawn state untouched.
-- Update macOS and Linux UI text to report enabled versus currently active status and the active internal dimensions. Patch only the widescreen documentation section, preserving the existing unrelated README and `.github` work.
+- Update macOS and Linux UI text to report enabled versus currently active status and the active internal dimensions. Update the widescreen and contributor documentation without disturbing unrelated README content.
 
 ## Interfaces
 

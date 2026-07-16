@@ -81,8 +81,3 @@ referenced framework commit is reachable from the configured submodule remote.
   sources, build trees, or unrelated files.
 - Describe which platforms and real runtime paths were exercised. Keep human
   gameplay validation separate from automated coverage.
-
-Pull requests and pushes run ROM-free source checks. Maintainer pushes and
-manual workflow runs additionally build platform artifacts when the private
-`MMX_ROM_BASE64` repository secret is configured; otherwise those jobs skip
-cleanly.
