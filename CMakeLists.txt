@@ -25,6 +25,7 @@ set(CMAKE_C_STANDARD 11)
 
 set(SNESRECOMP_ROOT ${CMAKE_SOURCE_DIR}/snesrecomp)
 include(${SNESRECOMP_ROOT}/runner/runner.cmake)
+include(${SNESRECOMP_ROOT}/runner/src/launcher_ng/launcher_ng.cmake)
 
 find_package(SDL2 REQUIRED)
 find_package(OpenGL REQUIRED)
@@ -114,6 +115,11 @@ function(add_mmx_variant TARGET GEN_DIR CFG_INCLUDE_DIR)
     else()
         target_link_libraries(${TARGET} PRIVATE ${SDL2_LIBRARIES})
     endif()
+
+    # Dear ImGui pre-boot launcher (GUI). One call wires sources/includes/
+    # SNES_LAUNCHER/CXX/asset-staging; see launcher_ng/launcher_ng.cmake.
+    snesrecomp_target_launcher_ng(${TARGET}
+        BOXART ${CMAKE_SOURCE_DIR}/recomp/launcher/boxart.tga)
 endfunction()
 
 # ── USA: Mega Man X (v1.1) — faithful LLE scheduler by default ──
