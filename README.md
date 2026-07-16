@@ -27,7 +27,15 @@ The game has been tested and is playable end to end.
 
 No known issues at this time on Windows builds. 
 
-Mac OSX/Linux are supported, but have not been extensively tested.
+macOS and Linux are supported. Linux on Steam Deck has been validated through
+full game completion with the true widescreen renderer enabled by
+tester [littlerobotfairy](https://www.twitch.tv/videos/2820912518).
+
+### Linux / Steam Deck validation
+
+Tester **littlerobotfairy** completed the game on Linux running on Steam Deck
+with true widescreen enabled. The complete playthrough is documented in the
+[Twitch VOD](https://www.twitch.tv/videos/2820912518).
 
 If you hit a reproducible lockup or visual regression, please open an
 issue with a savestate (`Shift+F1`) and the frame at which it
