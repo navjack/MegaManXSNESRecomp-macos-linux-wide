@@ -852,6 +852,7 @@ int main(int argc, char** argv) {
         gi.known_sha256 = &kMmxRomSha256;   /* single accepted digest */
         gi.num_known_sha256 = 1;
         gi.widescreen_supported = 0;   /* hide Widescreen panel */
+        gi.num_players = 1;            /* MMX is 1-player — hide the Player 2 row */
         gi.msu1_supported = 0;         /* hide MSU-1 panel */
         gi.config_path = config_file;  /* hotkey editor targets the live config */
 
