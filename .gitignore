@@ -84,3 +84,10 @@ release-macos*/
 *.fig
 # per-variant generated C (copyrighted, regenerated at build time)
 variants/*/gen/
+
+# --- macOS port: build artifacts, ROMs and local machine state ---
+*.app/
+release-assets/
+release-linux-docker/
+release-windows/
+appimage-runtime-*
